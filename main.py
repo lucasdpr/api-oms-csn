@@ -48,15 +48,36 @@ def corrigir_banco():
     # 1. Garante que a tabela de equipamentos existe
     cursor.execute('''CREATE TABLE IF NOT EXISTS equipamentos (ID TEXT PRIMARY KEY)''')
     
-    # 2. Adiciona colunas ausentes na tabela principal
+    # 2. Adiciona colunas ausentes na tabela principal (se não existirem)
     colunas_faltando = ['TONELAGEM REAL', 'DIAS INTEGER', 'STATUS TEXT', 'LOCAL TEXT', 'META REAL']
     for coluna in colunas_faltando:
         try: cursor.execute(f"ALTER TABLE equipamentos ADD COLUMN {coluna}")
         except: pass
             
-    # 🔥 A MÁGICA AQUI: Cria a coluna nova_meta no histórico!
-    try: cursor.execute("ALTER TABLE historico_reparos ADD COLUMN nova_meta REAL")
-    except: pass
+    # 3. CORREÇÃO DO HISTÓRICO (Permitir que a mesma peça tenha vários históricos)
+    cursor.execute("PRAGMA table_info(historico_reparos)")
+    colunas_hist = [col[1] for col in cursor.fetchall()]
+    
+    # Se a tabela de histórico antiga existir e não tiver um "id" próprio, ela está travada.
+    if 'id' not in colunas_hist and len(colunas_hist) > 0:
+        cursor.execute("ALTER TABLE historico_reparos RENAME TO historico_reparos_backup")
+        
+    # Cria a tabela de histórico perfeita (com um ID automático para cada OS)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS historico_reparos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_peca TEXT,
+            tipo_equipamento TEXT,
+            tecnico TEXT,
+            tipo_manutencao TEXT,
+            dados_chegada TEXT,
+            dados_saida TEXT,
+            status_reparo TEXT,
+            pdf_base64 TEXT,
+            ultima_modificacao TEXT,
+            nova_meta REAL
+        )
+    ''')
             
     conexao.commit()
     conexao.close()
