@@ -34,8 +34,35 @@ app.add_middleware(
     allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
-)
+    allow_headers=["*"]
+) # <--- O Python sentiu falta de fechar este parêntese!
+
+# ==========================================
+# CORREÇÃO AUTOMÁTICA DO BANCO DE DADOS
+# ==========================================
+def corrigir_banco():
+    import sqlite3
+    conexao = sqlite3.connect('oficina.db', timeout=10)
+    cursor = conexao.cursor()
+    
+    # 1. Garante que a tabela de equipamentos existe
+    cursor.execute('''CREATE TABLE IF NOT EXISTS equipamentos (ID TEXT PRIMARY KEY)''')
+    
+    # 2. Adiciona colunas ausentes na tabela principal
+    colunas_faltando = ['TONELAGEM REAL', 'DIAS INTEGER', 'STATUS TEXT', 'LOCAL TEXT', 'META REAL']
+    for coluna in colunas_faltando:
+        try: cursor.execute(f"ALTER TABLE equipamentos ADD COLUMN {coluna}")
+        except: pass
+            
+    # 🔥 A MÁGICA AQUI: Cria a coluna nova_meta no histórico!
+    try: cursor.execute("ALTER TABLE historico_reparos ADD COLUMN nova_meta REAL")
+    except: pass
+            
+    conexao.commit()
+    conexao.close()
+
+# Roda a verificação
+corrigir_banco()
 
 # ==========================================
 # ROTAS DO SISTEMA
@@ -75,54 +102,44 @@ def atualizar_peca(peca: PecaUpdate):
 @app.post("/api/salvar_folhao")
 def salvar_folhao_nuvem(folhao: FolhaoUpdate):
     try:
-        conexao = sqlite3.connect('oficina.db')
+        import sqlite3
+        from datetime import datetime
+        conexao = sqlite3.connect('oficina.db', timeout=10)
         cursor = conexao.cursor()
+        data_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # Cria a tabela de histórico (agora com a coluna para o PDF)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS historico_reparos (
-                id_peca TEXT PRIMARY KEY,
-                tipo_equipamento TEXT,
-                tecnico TEXT,
-                tipo_manutencao TEXT,
-                dados_chegada TEXT,
-                dados_saida TEXT,
-                status_reparo TEXT,
-                pdf_base64 TEXT,
-                ultima_modificacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+        # 1. Salva no Histórico com a NOVA META gravada para sempre
+        cursor.execute("""
+            INSERT INTO historico_reparos 
+            (id_peca, tipo_equipamento, tecnico, tipo_manutencao, dados_chegada, dados_saida, status_reparo, pdf_base64, ultima_modificacao, nova_meta)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (folhao.id_peca, folhao.tipo_equipamento, folhao.tecnico, folhao.tipo_manutencao, folhao.dados_chegada, folhao.dados_saida, folhao.status_reparo, folhao.pdf_base64, data_atual, folhao.nova_meta))
         
-        # Salva tudo na nuvem, incluindo o arquivo PDF
-        cursor.execute('''
-            INSERT OR REPLACE INTO historico_reparos 
-            (id_peca, tipo_equipamento, tecnico, tipo_manutencao, dados_chegada, dados_saida, status_reparo, pdf_base64)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (folhao.id_peca, folhao.tipo_equipamento, folhao.tecnico, folhao.tipo_manutencao,
-              folhao.dados_chegada, folhao.dados_saida, folhao.status_reparo, folhao.pdf_base64))
-        
-        # A REGRA DE OURO DA LIBERAÇÃO (Geral vs Parcial)
-        if folhao.status_reparo == "Concluido":
-            cursor.execute("SELECT TONELAGEM, DIAS, META FROM equipamentos WHERE ID = ?", (folhao.id_peca,))
-            resultado = cursor.fetchone()
+        # 2. Atualiza a tabela de equipamentos (zera se for GERAL, mantém se for PARCIAL)
+        if folhao.tipo_manutencao == "GERAL":
+            cursor.execute("UPDATE equipamentos SET STATUS = 'Oficina / Reserva', TONELAGEM = 0, DIAS = 0, META = ? WHERE ID = ?", (folhao.nova_meta, folhao.id_peca))
+        else:
+            cursor.execute("UPDATE equipamentos SET STATUS = 'Oficina / Reserva', META = ? WHERE ID = ?", (folhao.nova_meta, folhao.id_peca))
             
-            ton_atual = resultado[0] if resultado else 0
-            dias_atual = resultado[1] if resultado else 0
-            meta_atual = resultado[2] if resultado else 0
-            
-            ton_final = 0 if folhao.tipo_manutencao == "Geral" else ton_atual
-            dias_final = 0 if folhao.tipo_manutencao == "Geral" else dias_atual
-            meta_final = folhao.nova_meta if folhao.nova_meta > 0 else meta_atual
-            
-            cursor.execute('''
-                UPDATE equipamentos 
-                SET TONELAGEM = ?, DIAS = ?, META = ?, STATUS = 'Oficina / Reserva', LOCAL = 'Estoque Reserva'
-                WHERE ID = ?
-            ''', (ton_final, dias_final, meta_final, folhao.id_peca))
-        
         conexao.commit()
         conexao.close()
+        return {"status": "sucesso", "mensagem": "Salvo com sucesso"}
+    except Exception as e:
+        return {"status": "erro", "mensagem": str(e)}
+    # A ROTA PARA LER O HISTÓRICO: Busca os reparos salvos na nuvem
+@app.get("/api/historico_reparos")
+def get_historico_reparos():
+    try:
+        conexao = sqlite3.connect('oficina.db')
+        conexao.row_factory = sqlite3.Row # Isso transforma as linhas em dicionários/JSON
+        cursor = conexao.cursor()
         
-        return {"status": "sucesso", "mensagem": f"Laudo PDF e dados da peça {folhao.id_peca} salvos com sucesso!"}
+        # Busca todo o histórico na tabela que criamos mais cedo
+        cursor.execute("SELECT * FROM historico_reparos ORDER BY ultima_modificacao DESC LIMIT 50")
+        linhas = cursor.fetchall()
+        lista_de_reparos = [dict(linha) for linha in linhas]
+        
+        conexao.close()
+        return lista_de_reparos
     except Exception as e:
         return {"status": "erro", "mensagem": str(e)}
