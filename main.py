@@ -39,6 +39,56 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
+@app.post("/api/salvar_folhao")
+def salvar_folhao(dados: dict):
+    try:
+        conexao = sqlite3.connect('oficina.db', timeout=10)
+        cursor = conexao.cursor()
+        
+        # Cria tabela se não existir
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS folhoes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id_peca TEXT,
+                tipo_equipamento TEXT,
+                tecnico TEXT,
+                nova_meta REAL,
+                tipo_manutencao TEXT,
+                dados_chegada TEXT,
+                dados_saida TEXT,
+                status_reparo TEXT,
+                data_hora TEXT,
+                pdf_base64 TEXT
+            )
+        ''')
+        
+        from datetime import datetime
+        data_hora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        cursor.execute('''
+            INSERT INTO folhoes 
+            (id_peca, tipo_equipamento, tecnico, nova_meta, tipo_manutencao,
+             dados_chegada, dados_saida, status_reparo, data_hora, pdf_base64)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            dados.get('id_peca', ''),
+            dados.get('tipo_equipamento', ''),
+            dados.get('tecnico', ''),
+            dados.get('nova_meta', 0),
+            dados.get('tipo_manutencao', ''),
+            dados.get('dados_chegada', '{}'),
+            dados.get('dados_saida', '{}'),
+            dados.get('status_reparo', 'Concluido'),
+            data_hora,
+            dados.get('pdf_base64', '')
+        ))
+        
+        conexao.commit()
+        conexao.close()
+        return {"status": "sucesso", "mensagem": "Folhão salvo com sucesso!"}
+    except Exception as e:
+        return {"status": "erro", "mensagem": str(e)}
+
 def corrigir_banco():
     conexao = sqlite3.connect('oficina.db', timeout=10)
     cursor = conexao.cursor()
@@ -133,11 +183,28 @@ def atualizar_peca(peca: PecaUpdate):
     try:
         conexao = sqlite3.connect('oficina.db')
         cursor = conexao.cursor()
-        cursor.execute("UPDATE equipamentos SET TONELAGEM = ?, DIAS = ? WHERE ID = ?", (peca.tonelagem, peca.dias, peca.id))
+        
+        # Verifica se a requisição enviou um "local" e "status" válidos
+        if peca.local != "" and peca.status != "":
+            # ✅ ATUALIZA TUDO: Tonelagem, Dias, Local (Veio) e Status
+            cursor.execute("""
+                UPDATE equipamentos 
+                SET TONELAGEM = ?, DIAS = ?, LOCAL = ?, STATUS = ? 
+                WHERE ID = ?
+            """, (peca.tonelagem, peca.dias, peca.local, peca.status, peca.id))
+        else:
+            # Mantém o comportamento antigo se por acaso o JS não enviar o local/status
+            cursor.execute("""
+                UPDATE equipamentos 
+                SET TONELAGEM = ?, DIAS = ? 
+                WHERE ID = ?
+            """, (peca.tonelagem, peca.dias, peca.id))
+            
         conexao.commit()
         conexao.close()
         return {"status": "sucesso"}
-    except Exception as e: return {"status": "erro", "mensagem": str(e)}
+    except Exception as e: 
+        return {"status": "erro", "mensagem": str(e)}
 
 @app.post("/api/apontar_producao_geral")
 def apontar_producao_geral(dados: ProducaoGeral):
