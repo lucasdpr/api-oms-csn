@@ -660,7 +660,7 @@ window.salvarEImprimirFolhaoMolde23 = async function() {
 
     // 3. 🔥 OBRIGA O NAVEGADOR A ESPERAR O BANCO DE DADOS 🔥
     try {
-        const resposta = await fetch("http://localhost:8000/api/salvar_folhao", {
+        const resposta = await fetch(window.API_BASE + "/api/salvar_folhao", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(dadosFolhao)

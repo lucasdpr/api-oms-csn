@@ -125,7 +125,7 @@ export function setVeioSelecionado(veio) { VEIO_SELECIONADO_PAINEL = veio; }
 
 export async function sincronizarAtivosReaisMCC4() {
     try {
-        const resposta = await fetch("http://localhost:8000/api/pecas");
+        const resposta = await fetch(window.API_BASE + "/api/pecas");
 
         if (!resposta.ok) {
             throw new Error(`API respondeu com status ${resposta.status}`);
@@ -218,7 +218,7 @@ function encontrarAtivoCorrespondente(ativoReal) {
 // ==========================================================================
 export async function salvarPecaNoPython(peca) {
     try {
-        const resposta = await fetch("http://localhost:8000/api/atualizar_peca", {
+        const resposta = await fetch(window.API_BASE + "/api/atualizar_peca", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json"

@@ -559,7 +559,7 @@ window.salvarEImprimirFolhaoBow = async function() {
 
     // 3. 🔥 COMUNICAÇÃO COM O PYTHON (ESPERA O BANCO SALVAR) 🔥
     try {
-        const resposta = await fetch("http://localhost:8000/api/salvar_folhao", {
+        const resposta = await fetch(window.API_BASE + "/api/salvar_folhao", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(dadosFolhao)

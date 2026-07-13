@@ -2615,7 +2615,7 @@ window.processarProducaoDiaria = async function() {
     localStorage.setItem("oms_ativos_v32_local", JSON.stringify(BANCO_ATIVOS));
 
     try {
-        const resposta = await fetch("http://localhost:8000/api/apontar_producao_geral", {
+        const resposta = await fetch(window.API_BASE + "/api/apontar_producao_geral", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ mcc2: prodMcc2, mcc3: prodMcc3, mcc4: prodMcc4, operador: window.OPERADOR_LOGADO ? window.OPERADOR_LOGADO.nome : "Sistema" })
         });
@@ -2663,7 +2663,7 @@ window.salvarApontamentoMoldes = async function(event) {
     localStorage.setItem("oms_ativos_v32_local", JSON.stringify(BANCO_ATIVOS));
 
     try {
-        const resposta = await fetch("http://localhost:8000/api/apontar_moldes", {
+        const resposta = await fetch(window.API_BASE + "/api/apontar_moldes", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ qtd_mcc2: m2, qtd_mcc3: m3, qtd_mcc4: m4, operador: window.OPERADOR_LOGADO ? window.OPERADOR_LOGADO.nome : "Desconhecido" })
         });
@@ -2685,7 +2685,7 @@ window.salvarApontamentoMoldes = async function(event) {
 
 window.carregarHistoricoApontamentoGeral = async function() {
     try {
-        const res = await fetch("http://localhost:8000/api/historico_apontamentos_geral");
+        const res = await fetch(window.API_BASE + "/api/historico_apontamentos_geral");
         const json = await res.json();
         const tbody = document.getElementById("tabela-historico-geral");
         if (!tbody) return;
@@ -2702,7 +2702,7 @@ window.carregarHistoricoApontamentoGeral = async function() {
 
 window.carregarHistoricoApontamentoMoldes = async function() {
     try {
-        const res = await fetch("http://localhost:8000/api/historico_apontamentos_moldes");
+        const res = await fetch(window.API_BASE + "/api/historico_apontamentos_moldes");
         const json = await res.json();
         const tbody = document.getElementById("tabela-historico-moldes");
         if (!tbody) return;
@@ -2721,7 +2721,7 @@ window.desfazerApontamentoGeral = async function(id_log) {
     if (prompt("AÇÃO RESTRITA: Digite a senha master:") !== "dev123") return alert("❌ Senha incorreta!");
     if (!confirm("Tem certeza? A tonelagem será RETIRADA de todas as peças instaladas.")) return;
     try {
-        const res = await fetch("http://localhost:8000/api/desfazer_apontamento_geral", {
+        const res = await fetch(window.API_BASE + "/api/desfazer_apontamento_geral", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ log_id: id_log, operador: window.OPERADOR_LOGADO ? window.OPERADOR_LOGADO.nome : "Desconhecido" })
         });
@@ -2742,7 +2742,7 @@ window.desfazerApontamentoMolde = async function(id_log) {
     if (prompt("AÇÃO RESTRITA: Digite a senha master:") !== "dev123") return alert("❌ Senha incorreta!");
     if (!confirm("Tem certeza? As corridas serão RETIRADAS dos moldes na linha.")) return;
     try {
-        const res = await fetch("http://localhost:8000/api/desfazer_apontamento_moldes", {
+        const res = await fetch(window.API_BASE + "/api/desfazer_apontamento_moldes", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ log_id: id_log, operador: window.OPERADOR_LOGADO ? window.OPERADOR_LOGADO.nome : "Desconhecido" })
         });
