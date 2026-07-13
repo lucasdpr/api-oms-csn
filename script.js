@@ -167,7 +167,7 @@ function toggleSidebar() {
 // ==========================================
 // AUTENTICAÇÃO E NAVEGAÇÃO
 // ==========================================
-window.processarAutenticacaoHome = function() {
+function processarAutenticacaoHome() {
     const nomeInput = document.getElementById("login-nome").value.trim();
     const matriculaInput = document.getElementById("login-matricula").value.trim();
 
@@ -195,26 +195,7 @@ window.processarAutenticacaoHome = function() {
     } else {
         alert("Falha: Matrícula não localizada.");
     }
-};
-
-window.fazerLogout = function() {
-    if (confirm("Encerrar o turno?")) {
-        registrarHistorico("SISTEMA", "Turno encerrado.");
-        OPERADOR_LOGADO = null;
-        localStorage.removeItem("oms_operador_v32_local");
-        document.getElementById("container-sistema-oms").style.display = "none";
-        document.getElementById("tela-login-home").style.display = "flex";
-    }
-};
-
-window.verificarAcesso = function() {
-    if (!OPERADOR_LOGADO) {
-        document.getElementById("container-sistema-oms").style.display = "none";
-        document.getElementById("tela-login-home").style.display = "flex";
-        return false;
-    }
-    return true;
-};
+}
 
 function fazerLogout() {
     if (confirm("Encerrar o turno?")) {
@@ -2566,7 +2547,7 @@ window.carregarAtivosDoPython = async function() {
         console.log("🔄 Conectando ao Banco de Dados Python...");
         
         // A OPÇÃO NUCLEAR: Esse 'Math.random' impede o navegador de usar a memória velha!
-        const url_fura_cache = "window.API_BASE/api/pecas?v=" + Math.random();
+        const url_fura_cache = window.API_BASE + "/api/pecas?v=" + Math.random();
         
         const res = await fetch(url_fura_cache);
         const dados = await res.json();
