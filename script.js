@@ -2566,7 +2566,7 @@ window.carregarAtivosDoPython = async function() {
         console.log("🔄 Conectando ao Banco de Dados Python...");
         
         // A OPÇÃO NUCLEAR: Esse 'Math.random' impede o navegador de usar a memória velha!
-        const url_fura_cache = "http://localhost:8000/api/pecas?v=" + Math.random();
+        const url_fura_cache = "window.API_BASE/api/pecas?v=" + Math.random();
         
         const res = await fetch(url_fura_cache);
         const dados = await res.json();
