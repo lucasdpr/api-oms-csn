@@ -1,0 +1,31 @@
+﻿# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Bancos de dados
+*.db
+*.sqlite3
+*.sqlite
+
+# Planilhas
+*.xlsx
+*.xls
+
+# Temporários
+*.tmp
+*.log
+.DS_Store
+Thumbs.db
+
+# Virtual env
+venv/
+env/
+.venv/
