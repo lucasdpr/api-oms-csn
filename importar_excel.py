@@ -122,6 +122,9 @@ def importar():
     cursor.execute('''
         ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS tag_patrimonio TEXT
     ''')
+    cursor.execute('''
+        ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS data_entrada TEXT
+    ''')
     conn.commit()
 
     print(f"Lendo planilha '{EXCEL_FILE}'...")
@@ -151,6 +154,14 @@ def importar():
             dias = int(row['DIAS']) if pd.notna(row['DIAS']) else 0
             status = str(row['STATUS']).strip() if pd.notna(row['STATUS']) else "Instalado"
 
+            # Data de entrada/instalação: vem da coluna ENTRADA da planilha
+            # (já existia lá, só não estava sendo aproveitada até agora)
+            entrada_raw = row.get('ENTRADA')
+            if pd.notna(entrada_raw):
+                data_entrada = entrada_raw.strftime('%d/%m/%Y') if hasattr(entrada_raw, 'strftime') else str(entrada_raw).strip()
+            else:
+                data_entrada = None
+
             chave = (veio, tipo)
             contadores[chave] = contadores.get(chave, 0) + 1
             id_sistema = gerar_id_sistema(letra, tipo, contadores[chave])
@@ -160,7 +171,7 @@ def importar():
                 tags_duplicadas.append(tag_patrimonio)
             tags_vistas[tag_patrimonio] = id_sistema
 
-            linhas.append((id_sistema, tipo, veio, status, tonelagem, dias, meta, posicao, tag_patrimonio))
+            linhas.append((id_sistema, tipo, veio, status, tonelagem, dias, meta, posicao, tag_patrimonio, data_entrada))
         except Exception as e:
             erros.append((row.get('ID'), str(e)))
 
@@ -181,8 +192,8 @@ def importar():
 
     print("Inserindo os equipamentos...")
     cursor.executemany('''
-        INSERT INTO equipamentos (id, tipo, local, status, tonelagem, dias, meta, posicao, tag_patrimonio)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO equipamentos (id, tipo, local, status, tonelagem, dias, meta, posicao, tag_patrimonio, data_entrada)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ''', linhas)
 
     conn.commit()

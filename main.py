@@ -94,6 +94,9 @@ def init_db():
             ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS tag_patrimonio TEXT
         ''')
         cursor.execute('''
+            ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS data_entrada TEXT
+        ''')
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS log_apontamento_geral (
                 id SERIAL PRIMARY KEY,
                 data_hora TEXT,
@@ -115,6 +118,15 @@ def init_db():
                 desfeito INTEGER DEFAULT 0
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS log_eventos (
+                id SERIAL PRIMARY KEY,
+                data_hora TEXT,
+                operador TEXT,
+                peca_id TEXT,
+                acao TEXT
+            )
+        ''')
         conn.commit()
 
 
@@ -130,6 +142,7 @@ class PecaUpdate(BaseModel):
     local: Optional[str] = None
     status: Optional[str] = None
     tag_patrimonio: Optional[str] = None
+    data_entrada: Optional[str] = None
 
 class ProducaoGeral(BaseModel):
     operador: str
@@ -145,6 +158,11 @@ class ApontamentoMoldes(BaseModel):
 
 class DesfazerApontamento(BaseModel):
     log_id: int
+    operador: str
+
+class EventoLog(BaseModel):
+    peca_id: str
+    acao: str
     operador: str
 
 # ==========================================
@@ -185,6 +203,9 @@ def atualizar_peca(peca: PecaUpdate):
     if peca.tag_patrimonio is not None:
         campos.append("tag_patrimonio = %s")
         valores.append(peca.tag_patrimonio)
+    if peca.data_entrada is not None:
+        campos.append("data_entrada = %s")
+        valores.append(peca.data_entrada)
 
     if not campos:
         raise HTTPException(status_code=400, detail="Nenhum campo para atualizar foi enviado.")
@@ -342,3 +363,30 @@ def desfazer_apontamento_moldes(dados: DesfazerApontamento):
 @app.get("/")
 def root():
     return {"message": "API - Oficina de Moldes CSN Online!"}
+
+
+@app.post("/api/registrar_evento")
+def registrar_evento(evento: EventoLog):
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao) VALUES (%s, %s, %s, %s)",
+            (agora, evento.operador, evento.peca_id, evento.acao)
+        )
+        conn.commit()
+    return {"sucesso": True}
+
+
+@app.get("/api/historico_eventos")
+def get_historico_eventos(peca_id: Optional[str] = None, limite: int = 200):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if peca_id:
+            cursor.execute(
+                "SELECT * FROM log_eventos WHERE peca_id = %s ORDER BY id DESC LIMIT %s",
+                (peca_id, limite)
+            )
+        else:
+            cursor.execute("SELECT * FROM log_eventos ORDER BY id DESC LIMIT %s", (limite,))
+        return cursor.fetchall()
