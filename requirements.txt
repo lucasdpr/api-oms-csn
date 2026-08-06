@@ -1,0 +1,8 @@
+﻿fastapi==0.104.1
+uvicorn==0.24.0
+pandas>=2.3.3
+openpyxl==3.1.2
+python-multipart==0.0.6
+sqlalchemy
+psycopg2-binary
+python-dotenv

@@ -1,0 +1,344 @@
+﻿import os
+from contextlib import contextmanager
+from datetime import datetime
+from typing import Optional
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+# Carrega variáveis de um arquivo .env quando rodando localmente.
+# No Render, as variáveis já vêm configuradas no ambiente e essa
+# chamada simplesmente não faz nada (não existe .env lá).
+load_dotenv()
+
+app = FastAPI(title="API - Oficina de Moldes CSN")
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ==========================================
+# 🔥 CONFIGURAÇÃO DO BANCO DE DADOS (via variáveis de ambiente)
+# ==========================================
+# IMPORTANTE: nunca coloque host/usuário/senha direto no código.
+# Configure essas variáveis:
+#   - No Render: aba "Environment" do serviço da API.
+#   - Localmente: crie um arquivo .env (nunca commitado) com base no .env.example.
+DB_HOST = os.environ.get("DB_HOST")
+DB_NAME = os.environ.get("DB_NAME")
+DB_USER = os.environ.get("DB_USER")
+DB_PASSWORD = os.environ.get("DB_PASSWORD")
+DB_PORT = os.environ.get("DB_PORT", "5432")
+
+if not all([DB_HOST, DB_NAME, DB_USER, DB_PASSWORD]):
+    raise RuntimeError(
+        "Variáveis de ambiente do banco não configuradas. "
+        "Defina DB_HOST, DB_NAME, DB_USER e DB_PASSWORD "
+        "(veja .env.example)."
+    )
+
+
+@contextmanager
+def get_db():
+    """
+    Fornece uma conexão com o banco e garante que ela é sempre fechada,
+    mesmo se a rota lançar uma exceção no meio do caminho.
+    """
+    conn = psycopg2.connect(
+        host=DB_HOST,
+        database=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        port=DB_PORT,
+        cursor_factory=RealDictCursor,
+    )
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def init_db():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        # Nota: identificadores sem aspas no Postgres são sempre convertidos
+        # para minúsculo automaticamente. As colunas abaixo já nascem em
+        # minúsculo por baixo dos panos (id, tipo, local, status,
+        # tonelagem, dias, meta, posicao) — deixamos assim no código pra
+        # não haver ambiguidade entre "como está escrito" e "como o banco
+        # realmente guarda".
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS equipamentos (
+                id TEXT PRIMARY KEY,
+                tipo TEXT,
+                local TEXT,
+                status TEXT,
+                tonelagem REAL,
+                dias INTEGER,
+                meta REAL,
+                posicao TEXT
+            )
+        ''')
+        # Guarda o código de patrimônio real da peça física, separado do
+        # id de sistema (que representa a vaga/posição, não a peça).
+        cursor.execute('''
+            ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS tag_patrimonio TEXT
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS log_apontamento_geral (
+                id SERIAL PRIMARY KEY,
+                data_hora TEXT,
+                operador TEXT,
+                qtd_mcc2 REAL,
+                qtd_mcc3 REAL,
+                qtd_mcc4 REAL,
+                desfeito INTEGER DEFAULT 0
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS log_apontamento_moldes (
+                id SERIAL PRIMARY KEY,
+                data_hora TEXT,
+                operador TEXT,
+                qtd_mcc2 INTEGER,
+                qtd_mcc3 INTEGER,
+                qtd_mcc4 INTEGER,
+                desfeito INTEGER DEFAULT 0
+            )
+        ''')
+        conn.commit()
+
+
+init_db()  # Roda na inicialização da API
+
+# ==========================================
+# MODELOS
+# ==========================================
+class PecaUpdate(BaseModel):
+    id: str
+    tonelagem: Optional[float] = None
+    dias: Optional[int] = None
+    local: Optional[str] = None
+    status: Optional[str] = None
+    tag_patrimonio: Optional[str] = None
+
+class ProducaoGeral(BaseModel):
+    operador: str
+    qtd_mcc2: float
+    qtd_mcc3: float
+    qtd_mcc4: float
+
+class ApontamentoMoldes(BaseModel):
+    operador: str
+    qtd_mcc2: int
+    qtd_mcc3: int
+    qtd_mcc4: int
+
+class DesfazerApontamento(BaseModel):
+    log_id: int
+    operador: str
+
+# ==========================================
+# ROTAS DA API
+# ==========================================
+@app.get("/api/pecas")
+def get_pecas():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM equipamentos")
+        return cursor.fetchall()
+
+
+@app.post("/api/atualizar_peca")
+def atualizar_peca(peca: PecaUpdate):
+    """
+    Atualiza só os campos que vieram preenchidos no payload.
+    Antes, essa rota sempre sobrescrevia tonelagem/dias mesmo quando
+    None era enviado (podendo zerar dados sem querer), e ignorava
+    local/status completamente (o que quebrava o Swap de posição
+    feito no ui.js). Os dois problemas foram corrigidos abaixo.
+    """
+    campos = []
+    valores = []
+
+    if peca.tonelagem is not None:
+        campos.append("tonelagem = %s")
+        valores.append(peca.tonelagem)
+    if peca.dias is not None:
+        campos.append("dias = %s")
+        valores.append(peca.dias)
+    if peca.local is not None:
+        campos.append("local = %s")
+        valores.append(peca.local)
+    if peca.status is not None:
+        campos.append("status = %s")
+        valores.append(peca.status)
+    if peca.tag_patrimonio is not None:
+        campos.append("tag_patrimonio = %s")
+        valores.append(peca.tag_patrimonio)
+
+    if not campos:
+        raise HTTPException(status_code=400, detail="Nenhum campo para atualizar foi enviado.")
+
+    valores.append(peca.id)
+    query = f"UPDATE equipamentos SET {', '.join(campos)} WHERE id = %s"
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, tuple(valores))
+        if cursor.rowcount == 0:
+            conn.rollback()
+            raise HTTPException(status_code=404, detail=f"Peça '{peca.id}' não encontrada.")
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+@app.post("/api/apontar_producao_geral")
+def apontar_producao_geral(dados: ProducaoGeral):
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        for qtd in (dados.qtd_mcc2, dados.qtd_mcc3, dados.qtd_mcc4):
+            if qtd and qtd > 0:
+                cursor.execute("""
+                    UPDATE equipamentos
+                    SET tonelagem = COALESCE(tonelagem, 0) + %s
+                    WHERE status = 'Instalado'
+                    AND (local LIKE '%%Veio C%%' OR local LIKE '%%Veio D%%'
+                         OR local LIKE '%%Veio E%%' OR local LIKE '%%Veio F%%'
+                         OR local LIKE '%%Veio G%%' OR local LIKE '%%Veio H%%')
+                    AND UPPER(tipo) NOT LIKE '%%MOLDE%%'
+                """, (qtd,))
+
+        cursor.execute(
+            "INSERT INTO log_apontamento_geral (data_hora, operador, qtd_mcc2, qtd_mcc3, qtd_mcc4, desfeito) "
+            "VALUES (%s, %s, %s, %s, %s, 0)",
+            (agora, dados.operador, dados.qtd_mcc2, dados.qtd_mcc3, dados.qtd_mcc4)
+        )
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+@app.post("/api/apontar_moldes")
+def apontar_moldes(dados: ApontamentoMoldes):
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        for qtd in (dados.qtd_mcc2, dados.qtd_mcc3, dados.qtd_mcc4):
+            if qtd and qtd > 0:
+                cursor.execute("""
+                    UPDATE equipamentos
+                    SET tonelagem = COALESCE(tonelagem, 0) + %s
+                    WHERE status = 'Instalado'
+                    AND (local LIKE '%%Veio C%%' OR local LIKE '%%Veio D%%'
+                         OR local LIKE '%%Veio E%%' OR local LIKE '%%Veio F%%'
+                         OR local LIKE '%%Veio G%%' OR local LIKE '%%Veio H%%')
+                    AND UPPER(tipo) LIKE '%%MOLDE%%'
+                """, (qtd,))
+
+        cursor.execute(
+            "INSERT INTO log_apontamento_moldes (data_hora, operador, qtd_mcc2, qtd_mcc3, qtd_mcc4, desfeito) "
+            "VALUES (%s, %s, %s, %s, %s, 0)",
+            (agora, dados.operador, dados.qtd_mcc2, dados.qtd_mcc3, dados.qtd_mcc4)
+        )
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+@app.get("/api/historico_apontamentos_geral")
+def get_historico_geral():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM log_apontamento_geral ORDER BY id DESC LIMIT 50")
+        return cursor.fetchall()
+
+
+@app.get("/api/historico_apontamentos_moldes")
+def get_historico_moldes():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM log_apontamento_moldes ORDER BY id DESC LIMIT 50")
+        return cursor.fetchall()
+
+
+@app.post("/api/desfazer_apontamento_geral")
+def desfazer_apontamento_geral(dados: DesfazerApontamento):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM log_apontamento_geral WHERE id = %s", (dados.log_id,))
+        log = cursor.fetchone()
+        if not log:
+            raise HTTPException(status_code=404, detail="Log não encontrado")
+        if log["desfeito"] == 1:
+            raise HTTPException(status_code=400, detail="Já foi desfeito.")
+
+        for qtd in (log["qtd_mcc2"], log["qtd_mcc3"], log["qtd_mcc4"]):
+            if qtd and qtd > 0:
+                cursor.execute("""
+                    UPDATE equipamentos
+                    SET tonelagem = GREATEST(0, COALESCE(tonelagem, 0) - %s)
+                    WHERE status = 'Instalado'
+                    AND (local LIKE '%%Veio C%%' OR local LIKE '%%Veio D%%'
+                         OR local LIKE '%%Veio E%%' OR local LIKE '%%Veio F%%'
+                         OR local LIKE '%%Veio G%%' OR local LIKE '%%Veio H%%')
+                    AND UPPER(tipo) NOT LIKE '%%MOLDE%%'
+                """, (qtd,))
+
+        cursor.execute(
+            "UPDATE log_apontamento_geral SET desfeito = 1, operador = %s WHERE id = %s",
+            (dados.operador, dados.log_id)
+        )
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+@app.post("/api/desfazer_apontamento_moldes")
+def desfazer_apontamento_moldes(dados: DesfazerApontamento):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM log_apontamento_moldes WHERE id = %s", (dados.log_id,))
+        log = cursor.fetchone()
+        if not log:
+            raise HTTPException(status_code=404, detail="Log não encontrado")
+        if log["desfeito"] == 1:
+            raise HTTPException(status_code=400, detail="Já foi desfeito.")
+
+        for qtd in (log["qtd_mcc2"], log["qtd_mcc3"], log["qtd_mcc4"]):
+            if qtd and qtd > 0:
+                cursor.execute("""
+                    UPDATE equipamentos
+                    SET tonelagem = GREATEST(0, COALESCE(tonelagem, 0) - %s)
+                    WHERE status = 'Instalado'
+                    AND (local LIKE '%%Veio C%%' OR local LIKE '%%Veio D%%'
+                         OR local LIKE '%%Veio E%%' OR local LIKE '%%Veio F%%'
+                         OR local LIKE '%%Veio G%%' OR local LIKE '%%Veio H%%')
+                    AND UPPER(tipo) LIKE '%%MOLDE%%'
+                """, (qtd,))
+
+        cursor.execute(
+            "UPDATE log_apontamento_moldes SET desfeito = 1, operador = %s WHERE id = %s",
+            (dados.operador, dados.log_id)
+        )
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+@app.get("/")
+def root():
+    return {"message": "API - Oficina de Moldes CSN Online!"}
