@@ -8,16 +8,12 @@ from dotenv import load_dotenv
 # as variáveis já vêm configuradas no ambiente).
 load_dotenv()
 
-DB_HOST = os.environ.get("DB_HOST")
-DB_NAME = os.environ.get("DB_NAME")
-DB_USER = os.environ.get("DB_USER")
-DB_PASSWORD = os.environ.get("DB_PASSWORD")
-DB_PORT = os.environ.get("DB_PORT", "5432")
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
-if not all([DB_HOST, DB_NAME, DB_USER, DB_PASSWORD]):
+if not DATABASE_URL:
     raise RuntimeError(
-        "Variáveis de ambiente do banco não configuradas. "
-        "Defina DB_HOST, DB_NAME, DB_USER e DB_PASSWORD (veja .env.example)."
+        "Variável de ambiente DATABASE_URL não configurada. "
+        "Defina ela com a connection string do Neon (veja .env.example)."
     )
 
 # Nome real do arquivo, do jeito que está na pasta do projeto.
@@ -97,11 +93,8 @@ def montar_posicao(id_sistema):
 
 
 def importar():
-    print("Conectando ao PostgreSQL do Render...")
-    conn = psycopg2.connect(
-        host=DB_HOST, database=DB_NAME, user=DB_USER,
-        password=DB_PASSWORD, port=DB_PORT
-    )
+    print("Conectando ao PostgreSQL do Neon...")
+    conn = psycopg2.connect(DATABASE_URL)
     cursor = conn.cursor()
 
     print("Verificando/atualizando estrutura da tabela...")

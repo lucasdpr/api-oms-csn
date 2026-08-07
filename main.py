@@ -33,17 +33,19 @@ app.add_middleware(
 # Configure essas variáveis:
 #   - No Render: aba "Environment" do serviço da API.
 #   - Localmente: crie um arquivo .env (nunca commitado) com base no .env.example.
-DB_HOST = os.environ.get("DB_HOST")
-DB_NAME = os.environ.get("DB_NAME")
-DB_USER = os.environ.get("DB_USER")
-DB_PASSWORD = os.environ.get("DB_PASSWORD")
-DB_PORT = os.environ.get("DB_PORT", "5432")
+# ==========================================
+# 🔥 CONFIGURAÇÃO DO BANCO DE DADOS (via variável de ambiente única)
+# ==========================================
+# IMPORTANTE: nunca coloque a connection string direto no código.
+# Configure essa variável:
+#   - No Render: aba "Environment" do serviço da API.
+#   - Localmente: crie um arquivo .env (nunca commitado) com base no .env.example.
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
-if not all([DB_HOST, DB_NAME, DB_USER, DB_PASSWORD]):
+if not DATABASE_URL:
     raise RuntimeError(
-        "Variáveis de ambiente do banco não configuradas. "
-        "Defina DB_HOST, DB_NAME, DB_USER e DB_PASSWORD "
-        "(veja .env.example)."
+        "Variável de ambiente DATABASE_URL não configurada. "
+        "Defina ela com a connection string do Neon (veja .env.example)."
     )
 
 
@@ -53,14 +55,7 @@ def get_db():
     Fornece uma conexão com o banco e garante que ela é sempre fechada,
     mesmo se a rota lançar uma exceção no meio do caminho.
     """
-    conn = psycopg2.connect(
-        host=DB_HOST,
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        port=DB_PORT,
-        cursor_factory=RealDictCursor,
-    )
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     try:
         yield conn
     finally:
