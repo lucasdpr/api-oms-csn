@@ -122,6 +122,16 @@ def init_db():
                 acao TEXT
             )
         ''')
+        # Colaboradores autorizados a logar no sistema (importados da planilha
+        # de cadastro da CSN + acesso de desenvolvedor).
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS colaboradores (
+                matricula TEXT PRIMARY KEY,
+                nome TEXT NOT NULL,
+                cargo TEXT DEFAULT 'Colaborador',
+                ativo BOOLEAN DEFAULT TRUE
+            )
+        ''')
         conn.commit()
 
 
@@ -384,4 +394,19 @@ def get_historico_eventos(peca_id: Optional[str] = None, limite: int = 200):
             )
         else:
             cursor.execute("SELECT * FROM log_eventos ORDER BY id DESC LIMIT %s", (limite,))
+        return cursor.fetchall()
+
+
+@app.get("/api/colaboradores")
+def get_colaboradores():
+    """
+    Lista os colaboradores autorizados a logar no sistema. Usado pelo
+    front-end (tela de login) para validar a matrícula digitada sem
+    precisar manter a lista fixa no código do JavaScript.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT matricula, nome, cargo FROM colaboradores WHERE ativo = TRUE ORDER BY nome"
+        )
         return cursor.fetchall()

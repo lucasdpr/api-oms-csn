@@ -6,3 +6,4 @@ python-multipart==0.0.6
 sqlalchemy
 psycopg2-binary
 python-dotenv
+bcrypt
