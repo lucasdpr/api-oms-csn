@@ -163,6 +163,24 @@ def init_db():
             ALTER TABLE materiais ADD COLUMN IF NOT EXISTS ativo BOOLEAN DEFAULT TRUE
         ''')
 
+        # Rascunho do folhão em andamento. Guarda TODAS as respostas do
+        # formulário (chegada, revisão, saída etc) enquanto o equipamento
+        # está na oficina. Assim um técnico pode preencher a chegada hoje
+        # e outro (ou o mesmo) completar a saída dias depois, sem perder
+        # nada — o rascunho só é apagado quando o folhão é finalizado e
+        # impresso. dados fica em TEXT guardando um JSON serializado com
+        # o valor de cada campo do formulário.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS folhoes_rascunho (
+                equipamento_id TEXT PRIMARY KEY,
+                tipo_folhao TEXT,
+                dados TEXT,
+                etapa TEXT,
+                atualizado_em TEXT,
+                criado_em TEXT
+            )
+        ''')
+
         conn.commit()
 
 
@@ -223,6 +241,15 @@ class MaterialAjuste(BaseModel):
 
 class MaterialRemover(BaseModel):
     codigo: str
+
+class FolhaoRascunhoSalvar(BaseModel):
+    equipamento_id: str
+    tipo_folhao: str
+    dados: str  # JSON serializado (string) com os valores do formulário
+    etapa: Optional[str] = None
+
+class FolhaoRascunhoFinalizar(BaseModel):
+    equipamento_id: str
 
 # ==========================================
 # ROTAS DA API
@@ -636,6 +663,77 @@ def remover_material(dados: MaterialRemover):
         if cursor.rowcount == 0:
             conn.rollback()
             raise HTTPException(status_code=404, detail=f"Material '{codigo}' não encontrado.")
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+# ==========================================
+# RASCUNHO DE FOLHÃO (chegada -> saída, persistido entre sessões)
+# ==========================================
+@app.get("/api/folhao/{equipamento_id}")
+def get_rascunho_folhao(equipamento_id: str):
+    """
+    Retorna o rascunho salvo do folhão daquele equipamento, se existir.
+    Usado ao reabrir o folhão pra continuar de onde parou (ex: já fez a
+    chegada, falta preencher a saída dias depois).
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM folhoes_rascunho WHERE equipamento_id = %s",
+            (equipamento_id,)
+        )
+        rascunho = cursor.fetchone()
+
+    if not rascunho:
+        raise HTTPException(status_code=404, detail="Nenhum rascunho salvo para este equipamento.")
+
+    return rascunho
+
+
+@app.post("/api/folhao/salvar")
+def salvar_rascunho_folhao(dados: FolhaoRascunhoSalvar):
+    """
+    Salva (upsert) o progresso do folhão. Chamado automaticamente
+    conforme o técnico preenche o formulário, então o trabalho nunca é
+    perdido mesmo se ele fechar a aba, trocar de computador ou voltar
+    outro dia pra terminar a saída.
+    """
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO folhoes_rascunho (equipamento_id, tipo_folhao, dados, etapa, atualizado_em, criado_em)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (equipamento_id) DO UPDATE SET
+                tipo_folhao = EXCLUDED.tipo_folhao,
+                dados = EXCLUDED.dados,
+                etapa = EXCLUDED.etapa,
+                atualizado_em = EXCLUDED.atualizado_em
+            """,
+            (dados.equipamento_id, dados.tipo_folhao, dados.dados, dados.etapa, agora, agora)
+        )
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+@app.post("/api/folhao/finalizar")
+def finalizar_rascunho_folhao(dados: FolhaoRascunhoFinalizar):
+    """
+    Apaga o rascunho quando o folhão é finalizado e impresso (o
+    equipamento libera a oficina). Se não existir rascunho, não é erro
+    — só significa que o folhão foi preenchido e impresso de uma vez só.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM folhoes_rascunho WHERE equipamento_id = %s",
+            (dados.equipamento_id,)
+        )
         conn.commit()
 
     return {"sucesso": True}
