@@ -46,7 +46,7 @@ def encontrar_arquivo():
 # Colaboradores extras que não vêm da planilha (ex: acesso de dev).
 # matricula: (nome, cargo)
 EXTRAS = {
-    "061012": ("Lucas", "Desenvolvedor"),
+    "061012": ("LUCAS", "Desenvolvedor"),
 }
 
 
