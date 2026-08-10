@@ -143,6 +143,26 @@ def init_db():
             ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS primeiro_acesso BOOLEAN DEFAULT TRUE
         ''')
 
+        # Almoxarifado de materiais gerais — antes vivia só no localStorage
+        # do navegador (cada colaborador via um estoque diferente!). Agora
+        # é compartilhado de verdade, igual equipamentos e colaboradores.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS materiais (
+                codigo TEXT PRIMARY KEY,
+                descricao TEXT NOT NULL,
+                qtd REAL NOT NULL DEFAULT 0
+            )
+        ''')
+        cursor.execute('''
+            ALTER TABLE materiais ADD COLUMN IF NOT EXISTS local TEXT
+        ''')
+        cursor.execute('''
+            ALTER TABLE materiais ADD COLUMN IF NOT EXISTS valor_unit REAL
+        ''')
+        cursor.execute('''
+            ALTER TABLE materiais ADD COLUMN IF NOT EXISTS ativo BOOLEAN DEFAULT TRUE
+        ''')
+
         conn.commit()
 
 
@@ -189,6 +209,20 @@ class DefinirSenhaColaborador(BaseModel):
     matricula: str
     senha_atual: str
     nova_senha: str
+
+class MaterialCadastro(BaseModel):
+    codigo: str
+    descricao: str
+    qtd: float = 0
+    local: Optional[str] = None
+    valor_unit: Optional[float] = None
+
+class MaterialAjuste(BaseModel):
+    codigo: str
+    fator: float
+
+class MaterialRemover(BaseModel):
+    codigo: str
 
 # ==========================================
 # ROTAS DA API
@@ -509,6 +543,99 @@ def definir_senha_colaborador(dados: DefinirSenhaColaborador):
             "UPDATE colaboradores SET senha_hash = %s, primeiro_acesso = FALSE WHERE matricula = %s",
             (novo_hash, matricula)
         )
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+# ==========================================
+# ALMOXARIFADO (compartilhado entre todos os colaboradores)
+# ==========================================
+@app.get("/api/materiais")
+def get_materiais():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT codigo, descricao, qtd, local, valor_unit FROM materiais WHERE ativo = TRUE ORDER BY descricao"
+        )
+        return cursor.fetchall()
+
+
+@app.post("/api/materiais/cadastrar")
+def cadastrar_material(dados: MaterialCadastro):
+    """
+    Cadastra um material novo, ou soma a quantidade se o código já existir
+    (mesmo comportamento que o front-end tinha localmente antes).
+    """
+    codigo = dados.codigo.strip().upper()
+    descricao = dados.descricao.strip().upper()
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT qtd FROM materiais WHERE codigo = %s", (codigo,))
+        existente = cursor.fetchone()
+
+        if existente:
+            cursor.execute(
+                "UPDATE materiais SET qtd = qtd + %s, ativo = TRUE WHERE codigo = %s",
+                (dados.qtd, codigo)
+            )
+            ja_existia = True
+        else:
+            cursor.execute(
+                "INSERT INTO materiais (codigo, descricao, qtd, local, valor_unit, ativo) "
+                "VALUES (%s, %s, %s, %s, %s, TRUE)",
+                (codigo, descricao, dados.qtd, dados.local, dados.valor_unit)
+            )
+            ja_existia = False
+
+        cursor.execute("SELECT codigo, descricao, qtd, local, valor_unit FROM materiais WHERE codigo = %s", (codigo,))
+        atualizado = cursor.fetchone()
+        conn.commit()
+
+    return {"sucesso": True, "ja_existia": ja_existia, "material": atualizado}
+
+
+@app.post("/api/materiais/ajustar")
+def ajustar_material(dados: MaterialAjuste):
+    """
+    Ajusta o saldo de um material (+1/-1 nos botões, ou qualquer fator).
+    Bloqueia se o resultado ficar negativo.
+    """
+    codigo = dados.codigo.strip().upper()
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT qtd FROM materiais WHERE codigo = %s AND ativo = TRUE", (codigo,))
+        material = cursor.fetchone()
+
+        if not material:
+            raise HTTPException(status_code=404, detail=f"Material '{codigo}' não encontrado.")
+
+        if material["qtd"] + dados.fator < 0:
+            raise HTTPException(status_code=400, detail="O estoque não pode ficar negativo.")
+
+        cursor.execute(
+            "UPDATE materiais SET qtd = qtd + %s WHERE codigo = %s",
+            (dados.fator, codigo)
+        )
+        cursor.execute("SELECT codigo, descricao, qtd, local, valor_unit FROM materiais WHERE codigo = %s", (codigo,))
+        atualizado = cursor.fetchone()
+        conn.commit()
+
+    return {"sucesso": True, "material": atualizado}
+
+
+@app.post("/api/materiais/remover")
+def remover_material(dados: MaterialRemover):
+    codigo = dados.codigo.strip().upper()
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE materiais SET ativo = FALSE WHERE codigo = %s", (codigo,))
+        if cursor.rowcount == 0:
+            conn.rollback()
+            raise HTTPException(status_code=404, detail=f"Material '{codigo}' não encontrado.")
         conn.commit()
 
     return {"sucesso": True}
