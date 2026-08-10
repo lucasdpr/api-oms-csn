@@ -87,7 +87,7 @@ def importar():
             if not matricula or not nome:
                 continue
 
-            linhas.append((matricula, nome, "Colaborador"))
+            linhas.append((matricula, nome, "Técnico"))
         except Exception as e:
             erros.append((row.get('Matríc.'), str(e)))
 

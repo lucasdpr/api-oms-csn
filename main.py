@@ -122,14 +122,43 @@ def init_db():
                 acao TEXT
             )
         ''')
+<<<<<<< HEAD
         # Colaboradores autorizados a logar no sistema (importados da planilha
         # de cadastro da CSN + acesso de desenvolvedor).
         cursor.execute('''
+=======
+<<<<<<< HEAD
+        # 🆕 Tabela do que faltava: registro de folhão concluído (o
+        # checklist de manutenção de cada equipamento). Antes essa rota
+        # nem existia no back-end — os folhões chamavam
+        # localhost:8000/api/salvar_folhao direto, que só existia numa
+        # versão antiga (SQLite) do projeto.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS log_folhoes (
+                id SERIAL PRIMARY KEY,
+                data_hora TEXT,
+                id_peca TEXT,
+                tipo_equipamento TEXT,
+                tecnico TEXT,
+                nova_meta REAL,
+                tipo_manutencao TEXT,
+                dados_chegada TEXT,
+                dados_saida TEXT,
+                status_reparo TEXT
+=======
+        # Colaboradores autorizados a logar no sistema (importados da planilha
+        # de cadastro da CSN + acesso de desenvolvedor).
+        cursor.execute('''
+>>>>>>> a931d2d (import colaborador)
             CREATE TABLE IF NOT EXISTS colaboradores (
                 matricula TEXT PRIMARY KEY,
                 nome TEXT NOT NULL,
                 cargo TEXT DEFAULT 'Colaborador',
                 ativo BOOLEAN DEFAULT TRUE
+<<<<<<< HEAD
+=======
+>>>>>>> cdb1a37 (feat: atualiza script de importacao de colaboradores com upsert e desativacao)
+>>>>>>> a931d2d (import colaborador)
             )
         ''')
         conn.commit()
@@ -397,6 +426,59 @@ def get_historico_eventos(peca_id: Optional[str] = None, limite: int = 200):
         return cursor.fetchall()
 
 
+<<<<<<< HEAD
+@app.get("/api/colaboradores")
+def get_colaboradores():
+=======
+<<<<<<< HEAD
+@app.post("/api/salvar_folhao")
+def salvar_folhao(folhao: FolhaoSalvar):
+>>>>>>> a931d2d (import colaborador)
+    """
+    Lista os colaboradores autorizados a logar no sistema. Usado pelo
+    front-end (tela de login) para validar a matrícula digitada sem
+    precisar manter a lista fixa no código do JavaScript.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+<<<<<<< HEAD
+        cursor.execute(
+            "SELECT matricula, nome, cargo FROM colaboradores WHERE ativo = TRUE ORDER BY nome"
+        )
+        return cursor.fetchall()
+=======
+        cursor.execute('''
+            INSERT INTO log_folhoes
+                (data_hora, id_peca, tipo_equipamento, tecnico, nova_meta, tipo_manutencao, dados_chegada, dados_saida, status_reparo)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ''', (
+            agora,
+            folhao.id_peca,
+            folhao.tipo_equipamento,
+            folhao.tecnico,
+            folhao.nova_meta,
+            folhao.tipo_manutencao,
+            folhao.dados_chegada,
+            folhao.dados_saida,
+            folhao.status_reparo,
+        ))
+
+        if folhao.status_reparo == "Concluido":
+            campos = ["dias = 0", "local = 'Oficina / Reserva'", "status = 'Disponível'"]
+            valores = []
+            if folhao.nova_meta and folhao.nova_meta > 0:
+                campos.append("meta = %s")
+                valores.append(folhao.nova_meta)
+            valores.append(folhao.id_peca)
+            cursor.execute(
+                f"UPDATE equipamentos SET {', '.join(campos)} WHERE id = %s",
+                tuple(valores)
+            )
+
+        conn.commit()
+
+    return {"status": "sucesso"}
+=======
 @app.get("/api/colaboradores")
 def get_colaboradores():
     """
@@ -410,3 +492,5 @@ def get_colaboradores():
             "SELECT matricula, nome, cargo FROM colaboradores WHERE ativo = TRUE ORDER BY nome"
         )
         return cursor.fetchall()
+>>>>>>> cdb1a37 (feat: atualiza script de importacao de colaboradores com upsert e desativacao)
+>>>>>>> a931d2d (import colaborador)
