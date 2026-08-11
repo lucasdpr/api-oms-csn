@@ -181,6 +181,82 @@ def init_db():
             )
         ''')
 
+        # Estoque de rolos — antes vivia só no localStorage (cada
+        # colaborador via um saldo diferente). Agora fica no Neon,
+        # igual equipamentos e materiais.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS rolos (
+                id TEXT PRIMARY KEY,
+                nome TEXT NOT NULL,
+                conjunto TEXT,
+                mcc_compat TEXT,
+                qtd REAL NOT NULL DEFAULT 0
+            )
+        ''')
+
+        # Estoque hidráulico — diferente dos rolos/materiais, guarda DOIS
+        # saldos separados por item: o que está aplicado na máquina
+        # (qtd_aplicado) e o que está de reserva na oficina (qtd_reserva).
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS hidraulica (
+                id TEXT PRIMARY KEY,
+                nome TEXT NOT NULL,
+                conjunto TEXT,
+                mcc_compat TEXT,
+                qtd_aplicado REAL NOT NULL DEFAULT 0,
+                qtd_reserva REAL NOT NULL DEFAULT 0
+            )
+        ''')
+
+        # Semeia os itens padrão (só na primeira vez — se o item já existe,
+        # o ON CONFLICT ignora e mantém o saldo real que já estiver lá).
+        cursor.executemany('''
+            INSERT INTO rolos (id, nome, conjunto, mcc_compat, qtd)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO NOTHING
+        ''', [
+            ("R-S5", "Rolo de Cadeira 450", "Cadeira", "2/3", 14),
+            ("R-S5P", "Rolo de Cadeira 450 Puxador", "Cadeira", "2/3", 8),
+            ("R-S4", "Rolo de Cadeira 400", "Cadeira", "2/3", 12),
+            ("R-S4P", "Rolo de Cadeira 400 Puxador", "Cadeira", "2/3", 6),
+            ("R-H300A", "Rolo Horizontal de 300 Acionado", "Segmento", "4", 6),
+            ("R-200", "Rolo 200", "Segmento Zero", "2/3/4", 8),
+            ("R-FR23", "FOOT ROLL MCC#2,3", "Molde", "2/3", 4),
+            ("R-FR4", "FOOT ROLL MCC#4", "Molde", "4", 0),
+            ("R-ER4", "EDGE ROLL MCC#4", "Molde", "4", 0),
+            ("R-BND4", "ROLO DO BENDER", "Bender", "4", 0),
+            ("R-HOR4", "ROLO HORIZONTAL MCC#4", "Horizontal", "4", 0),
+            ("R-HOR4P", "ROLO HORIZONTAL PUXADOR MCC#4", "Horizontal", "4", 0),
+            ("R-BOWA", "ROLO BOW ACIONADO", "Bow", "4", 0),
+            ("R-BOW728", "ROLO BOW 728", "Bow", "4", 0),
+            ("R-BOW955", "ROLO BOW 955", "Bow", "4", 0),
+            ("R-SZ200", "ROLO SEGMENTO ZERO 200", "Segmento Zero", "2/3", 0),
+            ("R-SZ140", "ROLO SEGMENTO ZERO 140", "Segmento Zero", "2/3", 0),
+            ("R-GRP1", "ROLO SEGMENTO DE GRUPO 1", "Grupo 1", "2/3", 0),
+            ("R-GRP1P", "ROLO SEGMENTO DE GRUPO 1 PUXADOR", "Grupo 1", "2/3", 0),
+            ("R-GRP2", "ROLO SEGMENTO DE GRUPO 2", "Grupo 2", "2/3", 0),
+            ("R-GRP2P", "ROLO SEGMENTO DE GRUPO 2 PUXADOR", "Grupo 2", "2/3", 0),
+            ("R-GRP3", "ROLO SEGMENTO DE GRUPO 3", "Grupo 3", "2/3", 0),
+            ("R-GRP3P", "ROLO SEGMENTO DE GRUPO 3 PUXADOR", "Grupo 3", "2/3", 0),
+        ])
+
+        cursor.executemany('''
+            INSERT INTO hidraulica (id, nome, conjunto, mcc_compat, qtd_aplicado, qtd_reserva)
+            VALUES (%s, %s, %s, %s, 0, 0)
+            ON CONFLICT (id) DO NOTHING
+        ''', [
+            ("H-PGH12", "Porca Hidráulica Grupo 1,2", "Grupo 1,2", "2/3"),
+            ("H-PGH3", "Porca Hidráulica Grupo 3", "Grupo 3", "2/3"),
+            ("H-CIL-G1", "Cilindro de Grupo 1", "Grupo 1", "2/3"),
+            ("H-CIL-G2", "Cilindro de Grupo 2", "Grupo 2", "2/3"),
+            ("H-CIL-G3", "Cilindro de Grupo 3", "Grupo 3", "2/3"),
+            ("H-DESEMP", "Desempenadeira Cadeira", "Cadeira", "2/3"),
+            ("H-CIL-ELEV4", "Cilindro de Elevação de Estrutura", "Estrutura", "4"),
+            ("H-CIL-PUX4", "Cilindro Puxador", "Puxador", "4"),
+            ("H-PH-BOW", "Porca Hidráulica Bow", "Bow", "4"),
+            ("H-PH-HOR", "Porca Hidráulica Horizontal", "Horizontal", "4"),
+        ])
+
         conn.commit()
 
 
@@ -250,6 +326,15 @@ class FolhaoRascunhoSalvar(BaseModel):
 
 class FolhaoRascunhoFinalizar(BaseModel):
     equipamento_id: str
+
+class RoloAjuste(BaseModel):
+    id: str
+    fator: float
+
+class HidraulicaAjuste(BaseModel):
+    id: str
+    local: str  # "aplicado" (na máquina) ou "reserva" (oficina)
+    fator: float
 
 # ==========================================
 # ROTAS DA API
@@ -666,6 +751,78 @@ def remover_material(dados: MaterialRemover):
         conn.commit()
 
     return {"sucesso": True}
+
+
+# ==========================================
+# ESTOQUE DE ROLOS (compartilhado entre todos os colaboradores)
+# ==========================================
+@app.get("/api/rolos")
+def get_rolos():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM rolos ORDER BY conjunto, nome")
+        return cursor.fetchall()
+
+
+@app.post("/api/rolos/ajustar")
+def ajustar_rolo(dados: RoloAjuste):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT qtd FROM rolos WHERE id = %s", (dados.id,))
+        rolo = cursor.fetchone()
+
+        if not rolo:
+            raise HTTPException(status_code=404, detail=f"Rolo '{dados.id}' não encontrado.")
+
+        if rolo["qtd"] + dados.fator < 0:
+            raise HTTPException(status_code=400, detail="O estoque não pode ficar negativo.")
+
+        cursor.execute("UPDATE rolos SET qtd = qtd + %s WHERE id = %s", (dados.fator, dados.id))
+        cursor.execute("SELECT * FROM rolos WHERE id = %s", (dados.id,))
+        atualizado = cursor.fetchone()
+        conn.commit()
+
+    return {"sucesso": True, "rolo": atualizado}
+
+
+# ==========================================
+# ESTOQUE HIDRÁULICO (aplicado na máquina x reserva na oficina)
+# ==========================================
+@app.get("/api/hidraulica")
+def get_hidraulica():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM hidraulica ORDER BY mcc_compat, conjunto, nome")
+        return cursor.fetchall()
+
+
+@app.post("/api/hidraulica/ajustar")
+def ajustar_hidraulica(dados: HidraulicaAjuste):
+    if dados.local not in ("aplicado", "reserva"):
+        raise HTTPException(status_code=400, detail="local precisa ser 'aplicado' ou 'reserva'.")
+
+    # Coluna vem de uma whitelist fixa (nunca do texto puro do usuário),
+    # então não tem risco de SQL injection aqui mesmo montando a query
+    # com f-string.
+    coluna = "qtd_aplicado" if dados.local == "aplicado" else "qtd_reserva"
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT {coluna} AS saldo FROM hidraulica WHERE id = %s", (dados.id,))
+        item = cursor.fetchone()
+
+        if not item:
+            raise HTTPException(status_code=404, detail=f"Item hidráulico '{dados.id}' não encontrado.")
+
+        if item["saldo"] + dados.fator < 0:
+            raise HTTPException(status_code=400, detail="O estoque não pode ficar negativo.")
+
+        cursor.execute(f"UPDATE hidraulica SET {coluna} = {coluna} + %s WHERE id = %s", (dados.fator, dados.id))
+        cursor.execute("SELECT * FROM hidraulica WHERE id = %s", (dados.id,))
+        atualizado = cursor.fetchone()
+        conn.commit()
+
+    return {"sucesso": True, "item": atualizado}
 
 
 # ==========================================
