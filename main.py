@@ -49,7 +49,12 @@ def get_db():
     Fornece uma conexão com o banco e garante que ela é sempre fechada,
     mesmo se a rota lançar uma exceção no meio do caminho.
     """
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    # connect_timeout: quanto tempo (em segundos) esperar o Postgres do
+    # Neon responder antes de desistir. Sem isso, se o banco estiver
+    # "acordando" de um autosuspend, a conexão pode ficar pendurada por
+    # muito tempo e o navegador/celular desiste sozinho antes (mostrando
+    # erro de conexão mesmo com o servidor de pé).
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, connect_timeout=15)
     try:
         yield conn
     finally:
@@ -534,6 +539,22 @@ def desfazer_apontamento_moldes(dados: DesfazerApontamento):
 @app.get("/")
 def root():
     return {"message": "API - Oficina de Moldes CSN Online!"}
+
+
+@app.get("/api/ping_db")
+def ping_db():
+    """
+    Rota feita pra ser chamada periodicamente por um serviço externo
+    (ex: cron-job.org) a cada poucos minutos. Diferente da rota "/",
+    que só confirma que a API (Render) está de pé, esta aqui faz uma
+    consulta de verdade no banco (Neon) — é isso que impede o Neon de
+    suspender o banco por inatividade, mesmo com a API sempre ligada.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
+    return {"status": "ok", "banco": "acordado"}
 
 
 @app.post("/api/registrar_evento")
