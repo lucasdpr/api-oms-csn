@@ -84,8 +84,46 @@ def get_db():
     reaproveitasse ela do pool (erro tipo "current transaction is
     aborted"), o que seria pior e mais confuso que abrir uma conexão
     nova a cada vez.
+
+    🔧 CORREÇÃO ("entra mas o banco não carregou na primeira tentativa"):
+    o Neon suspende o banco por inatividade de forma INDEPENDENTE do
+    Render — mesmo com a API já acordada e respondendo normal (porque
+    alguém acessou há pouco em outro celular), o Neon pode voltar a
+    dormir sozinho enquanto a conexão fica parada, sem uso, dentro do
+    pool. Nesse caso o psycopg2, do lado do Python, continua achando
+    que a conexão está de pé — só descobre que morreu na hora de rodar
+    uma query de verdade. Sem essa checagem, a PRIMEIRA rota a pegar
+    essa conexão "zumbi" batia de frente com o erro e devolvia 500 pro
+    app, mesmo tudo parecendo "ligado". Como o front-end só repete a
+    tentativa em timeout/erro de rede (não em erro 500), isso aparecia
+    como "não carregou" — e só sumia quando o usuário fechava e abria
+    o app de novo (uma requisição nova, por sorte, pegava do pool uma
+    conexão diferente e saudável).
+
+    Agora, antes de entregar a conexão pra rota, faz um teste rápido
+    (SELECT 1). Se falhar, descarta essa conexão específica do pool e
+    pega (ou abre) outra na hora — a rota nunca chega a ver a conexão
+    morta, então o app não precisa mais "tentar de novo" manualmente.
     """
     conn = db_pool.getconn()
+
+    def _descartar_e_pegar_outra():
+        try:
+            db_pool.putconn(conn, close=True)
+        except Exception:
+            pass
+        return db_pool.getconn()
+
+    if conn.closed:
+        conn = _descartar_e_pegar_outra()
+    else:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        except Exception:
+            conn = _descartar_e_pegar_outra()
+
     try:
         yield conn
     except Exception:
