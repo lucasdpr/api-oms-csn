@@ -952,7 +952,3 @@ def finalizar_rascunho_folhao(dados: FolhaoRascunhoFinalizar):
         conn.commit()
 
     return {"sucesso": True}
-
-
-
-
