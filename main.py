@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import psycopg2
+from psycopg2 import pool as psycopg2_pool
 from psycopg2.extras import RealDictCursor
 
 # Carrega variáveis de um arquivo .env quando rodando localmente.
@@ -42,23 +43,59 @@ if not DATABASE_URL:
         "Defina ela com a connection string do Neon (veja .env.example)."
     )
 
+# ==========================================
+# 🔧 POOL DE CONEXÕES (em vez de abrir uma conexão nova do zero a cada
+# requisição)
+# ==========================================
+# ANTES: get_db() chamava psycopg2.connect(...) toda vez que uma rota
+# era acionada. O problema aparecia logo depois do login: o app dispara
+# várias chamadas quase ao mesmo tempo (equipamentos, rolos, hidráulica,
+# materiais...). Se o Neon ainda estivesse "acordando" naquele instante,
+# cada uma dessas chamadas tentava abrir sua PRÓPRIA conexão nova e
+# esperar o banco acordar por conta própria — várias tentativas de
+# handshake competindo ao mesmo tempo, o que deixava tudo mais lento e
+# fazia algumas chamadas estourarem o timeout mesmo com o retry no
+# front-end, mesmo o banco já tendo "acordado" fisicamente.
+#
+# AGORA: um pool é criado uma única vez quando a API sobe. Toda rota
+# empresta uma conexão já pronta do pool (put/get) em vez de abrir uma
+# nova — só a primeira conexão de verdade precisa esperar o Neon
+# acordar; as demais reaproveitam conexões que já estão de pé.
+db_pool = psycopg2_pool.ThreadedConnectionPool(
+    minconn=1,
+    maxconn=10,
+    dsn=DATABASE_URL,
+    cursor_factory=RealDictCursor,
+    connect_timeout=20,
+)
+
 
 @contextmanager
 def get_db():
     """
-    Fornece uma conexão com o banco e garante que ela é sempre fechada,
-    mesmo se a rota lançar uma exceção no meio do caminho.
+    Empresta uma conexão do pool e garante que ela sempre volta pro
+    pool no final, mesmo se a rota lançar uma exceção no meio do
+    caminho (nunca fecha a conexão de verdade — só devolve pro pool
+    pra outra requisição reaproveitar).
+
+    Se a rota lançar uma exceção no meio de uma transação, faz um
+    rollback antes de devolver a conexão — sem isso, uma transação
+    "presa" nessa conexão contaminaria a PRÓXIMA requisição que
+    reaproveitasse ela do pool (erro tipo "current transaction is
+    aborted"), o que seria pior e mais confuso que abrir uma conexão
+    nova a cada vez.
     """
-    # connect_timeout: quanto tempo (em segundos) esperar o Postgres do
-    # Neon responder antes de desistir. Sem isso, se o banco estiver
-    # "acordando" de um autosuspend, a conexão pode ficar pendurada por
-    # muito tempo e o navegador/celular desiste sozinho antes (mostrando
-    # erro de conexão mesmo com o servidor de pé).
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, connect_timeout=15)
+    conn = db_pool.getconn()
     try:
         yield conn
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
-        conn.close()
+        db_pool.putconn(conn)
 
 
 def init_db():
@@ -915,3 +952,7 @@ def finalizar_rascunho_folhao(dados: FolhaoRascunhoFinalizar):
         conn.commit()
 
     return {"sucesso": True}
+
+
+
+
