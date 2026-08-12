@@ -347,10 +347,13 @@ init_db()  # Roda na inicialização da API
 # ==========================================
 class PecaUpdate(BaseModel):
     id: str
+    tipo: Optional[str] = None
     tonelagem: Optional[float] = None
     dias: Optional[int] = None
     local: Optional[str] = None
     status: Optional[str] = None
+    meta: Optional[float] = None
+    posicao: Optional[str] = None
     tag_patrimonio: Optional[str] = None
     data_entrada: Optional[str] = None
 
@@ -430,15 +433,24 @@ def get_pecas():
 @app.post("/api/atualizar_peca")
 def atualizar_peca(peca: PecaUpdate):
     """
-    Atualiza só os campos que vieram preenchidos no payload.
-    Antes, essa rota sempre sobrescrevia tonelagem/dias mesmo quando
-    None era enviado (podendo zerar dados sem querer), e ignorava
-    local/status completamente (o que quebrava o Swap de posição
-    feito no ui.js). Os dois problemas foram corrigidos abaixo.
+    Atualiza só os campos que vieram preenchidos no payload. Se o id
+    ainda não existir no banco — por exemplo, um slot de Swap que
+    nunca teve peça instalada antes, ou uma peça nova cadastrada só
+    no navegador — CRIA a linha em vez de devolver 404.
+
+    🔧 CORREÇÃO: antes essa rota só sabia fazer UPDATE. Uma peça sem
+    linha prévia batia com 0 linhas afetadas e o front recebia "Peça
+    'X' não encontrada" — o Swap/instalação funcionava na tela
+    (localStorage), mas nunca persistia no Postgres. Também faltavam
+    tipo/meta/posicao no modelo (PecaUpdate), então mesmo o front já
+    mandando esses campos, eram descartados antes de chegar aqui.
     """
     campos = []
     valores = []
 
+    if peca.tipo is not None:
+        campos.append("tipo = %s")
+        valores.append(peca.tipo)
     if peca.tonelagem is not None:
         campos.append("tonelagem = %s")
         valores.append(peca.tonelagem)
@@ -451,6 +463,12 @@ def atualizar_peca(peca: PecaUpdate):
     if peca.status is not None:
         campos.append("status = %s")
         valores.append(peca.status)
+    if peca.meta is not None:
+        campos.append("meta = %s")
+        valores.append(peca.meta)
+    if peca.posicao is not None:
+        campos.append("posicao = %s")
+        valores.append(peca.posicao)
     if peca.tag_patrimonio is not None:
         campos.append("tag_patrimonio = %s")
         valores.append(peca.tag_patrimonio)
@@ -467,12 +485,42 @@ def atualizar_peca(peca: PecaUpdate):
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(query, tuple(valores))
+        criada = False
+
         if cursor.rowcount == 0:
-            conn.rollback()
-            raise HTTPException(status_code=404, detail=f"Peça '{peca.id}' não encontrada.")
+            # Não existia — cria a linha agora com os dados disponíveis.
+            # ON CONFLICT cobre o caso raro de outra requisição ter
+            # criado a mesma peça entre o UPDATE acima e este INSERT.
+            cursor.execute('''
+                INSERT INTO equipamentos (id, tipo, local, status, tonelagem, dias, meta, posicao, tag_patrimonio, data_entrada)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    tipo = EXCLUDED.tipo,
+                    local = EXCLUDED.local,
+                    status = EXCLUDED.status,
+                    tonelagem = EXCLUDED.tonelagem,
+                    dias = EXCLUDED.dias,
+                    meta = EXCLUDED.meta,
+                    posicao = EXCLUDED.posicao,
+                    tag_patrimonio = EXCLUDED.tag_patrimonio,
+                    data_entrada = EXCLUDED.data_entrada
+            ''', (
+                peca.id,
+                peca.tipo or "",
+                peca.local or "",
+                peca.status or "",
+                peca.tonelagem or 0,
+                peca.dias or 0,
+                peca.meta or 0,
+                peca.posicao or "",
+                peca.tag_patrimonio,
+                peca.data_entrada
+            ))
+            criada = True
+
         conn.commit()
 
-    return {"sucesso": True}
+    return {"sucesso": True, "criada": criada}
 
 
 @app.post("/api/apontar_producao_geral")
