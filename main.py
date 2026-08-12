@@ -181,6 +181,15 @@ def init_db():
         cursor.execute('''
             ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS substituido_por TEXT
         ''')
+        # 🔧 CORREÇÃO: o campo "Observação" (usado no Sinótico 3D e em
+        # outros lugares) sempre foi mandado pro back-end, mas nunca
+        # existiu de verdade aqui nem no modelo PecaUpdate — o Pydantic
+        # descartava ele silenciosamente, e como às vezes era o ÚNICO
+        # campo enviado, a rota respondia 400 "Nenhum campo para
+        # atualizar foi enviado", e a observação nunca era salva.
+        cursor.execute('''
+            ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS observacao TEXT
+        ''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS log_apontamento_geral (
@@ -372,6 +381,7 @@ class PecaUpdate(BaseModel):
     data_entrada: Optional[str] = None
     data_reparo: Optional[str] = None
     substituido_por: Optional[str] = None
+    observacao: Optional[str] = None
 
 class ProducaoGeral(BaseModel):
     operador: str
@@ -416,6 +426,9 @@ class MaterialAjuste(BaseModel):
 
 class MaterialRemover(BaseModel):
     codigo: str
+
+class PecaExcluir(BaseModel):
+    id: str
 
 class FolhaoRascunhoSalvar(BaseModel):
     equipamento_id: str
@@ -497,6 +510,9 @@ def atualizar_peca(peca: PecaUpdate):
     if peca.substituido_por is not None:
         campos.append("substituido_por = %s")
         valores.append(peca.substituido_por)
+    if peca.observacao is not None:
+        campos.append("observacao = %s")
+        valores.append(peca.observacao)
 
     if not campos:
         raise HTTPException(status_code=400, detail="Nenhum campo para atualizar foi enviado.")
@@ -514,8 +530,8 @@ def atualizar_peca(peca: PecaUpdate):
             # ON CONFLICT cobre o caso raro de outra requisição ter
             # criado a mesma peça entre o UPDATE acima e este INSERT.
             cursor.execute('''
-                INSERT INTO equipamentos (id, tipo, local, status, tonelagem, dias, meta, posicao, tag_patrimonio, data_entrada, data_reparo, substituido_por)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO equipamentos (id, tipo, local, status, tonelagem, dias, meta, posicao, tag_patrimonio, data_entrada, data_reparo, substituido_por, observacao)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     tipo = EXCLUDED.tipo,
                     local = EXCLUDED.local,
@@ -527,7 +543,8 @@ def atualizar_peca(peca: PecaUpdate):
                     tag_patrimonio = EXCLUDED.tag_patrimonio,
                     data_entrada = EXCLUDED.data_entrada,
                     data_reparo = EXCLUDED.data_reparo,
-                    substituido_por = EXCLUDED.substituido_por
+                    substituido_por = EXCLUDED.substituido_por,
+                    observacao = EXCLUDED.observacao
             ''', (
                 peca.id,
                 peca.tipo or "",
@@ -540,13 +557,40 @@ def atualizar_peca(peca: PecaUpdate):
                 peca.tag_patrimonio,
                 peca.data_entrada,
                 peca.data_reparo,
-                peca.substituido_por
+                peca.substituido_por,
+                peca.observacao
             ))
             criada = True
 
         conn.commit()
 
     return {"sucesso": True, "criada": criada}
+
+
+@app.post("/api/excluir_peca")
+def excluir_peca(peca: PecaExcluir):
+    """
+    Exclusão permanente de verdade (não é soft-delete como os materiais).
+    🔧 CORREÇÃO: esse endpoint não existia. O botão "Excluir" do front
+    (excluirEquipamento, em ui.js) só tirava a peça do localStorage —
+    parecia funcionar (sumia da tela, dava a mensagem de sucesso), mas
+    nunca mexia no Postgres. Na próxima sincronização (ex: recarregar a
+    página), sincronizarAtivosReaisMCC4() busca tudo nesse banco de novo
+    e a peça, que nunca tinha sido apagada de verdade, voltava a aparecer.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM equipamentos WHERE id = %s", (peca.id,))
+        if cursor.rowcount == 0:
+            conn.rollback()
+            raise HTTPException(status_code=404, detail=f"Peça '{peca.id}' não encontrada.")
+        # Limpa também um eventual rascunho de folhão em andamento pra essa
+        # peça — senão fica órfão no banco, referenciando um id que não
+        # existe mais.
+        cursor.execute("DELETE FROM folhoes_rascunho WHERE equipamento_id = %s", (peca.id,))
+        conn.commit()
+
+    return {"sucesso": True}
 
 
 @app.post("/api/apontar_producao_geral")
