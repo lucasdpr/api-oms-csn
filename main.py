@@ -167,6 +167,20 @@ def init_db():
         cursor.execute('''
             ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS data_entrada TEXT
         ''')
+        # 🔧 CORREÇÃO: "dataReparo" (quando a peça entrou em Oficina/Reparo,
+        # usado pra contar os dias) e "substituidoPor" (qual peça a
+        # substituiu no veio) só existiam na memória do navegador — nunca
+        # eram salvos aqui. Todo login roda sincronizarAtivosReaisMCC4()
+        # no front, que reconstrói TUDO a partir do que a API devolve; sem
+        # essas colunas, essa reconstrução sempre vinha sem elas, e o
+        # contador de dias "esquecia" quando a peça realmente saiu do veio,
+        # voltando a mostrar um valor congelado/desatualizado.
+        cursor.execute('''
+            ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS data_reparo TEXT
+        ''')
+        cursor.execute('''
+            ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS substituido_por TEXT
+        ''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS log_apontamento_geral (
@@ -356,6 +370,8 @@ class PecaUpdate(BaseModel):
     posicao: Optional[str] = None
     tag_patrimonio: Optional[str] = None
     data_entrada: Optional[str] = None
+    data_reparo: Optional[str] = None
+    substituido_por: Optional[str] = None
 
 class ProducaoGeral(BaseModel):
     operador: str
@@ -475,6 +491,12 @@ def atualizar_peca(peca: PecaUpdate):
     if peca.data_entrada is not None:
         campos.append("data_entrada = %s")
         valores.append(peca.data_entrada)
+    if peca.data_reparo is not None:
+        campos.append("data_reparo = %s")
+        valores.append(peca.data_reparo)
+    if peca.substituido_por is not None:
+        campos.append("substituido_por = %s")
+        valores.append(peca.substituido_por)
 
     if not campos:
         raise HTTPException(status_code=400, detail="Nenhum campo para atualizar foi enviado.")
@@ -492,8 +514,8 @@ def atualizar_peca(peca: PecaUpdate):
             # ON CONFLICT cobre o caso raro de outra requisição ter
             # criado a mesma peça entre o UPDATE acima e este INSERT.
             cursor.execute('''
-                INSERT INTO equipamentos (id, tipo, local, status, tonelagem, dias, meta, posicao, tag_patrimonio, data_entrada)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO equipamentos (id, tipo, local, status, tonelagem, dias, meta, posicao, tag_patrimonio, data_entrada, data_reparo, substituido_por)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     tipo = EXCLUDED.tipo,
                     local = EXCLUDED.local,
@@ -503,7 +525,9 @@ def atualizar_peca(peca: PecaUpdate):
                     meta = EXCLUDED.meta,
                     posicao = EXCLUDED.posicao,
                     tag_patrimonio = EXCLUDED.tag_patrimonio,
-                    data_entrada = EXCLUDED.data_entrada
+                    data_entrada = EXCLUDED.data_entrada,
+                    data_reparo = EXCLUDED.data_reparo,
+                    substituido_por = EXCLUDED.substituido_por
             ''', (
                 peca.id,
                 peca.tipo or "",
@@ -514,7 +538,9 @@ def atualizar_peca(peca: PecaUpdate):
                 peca.meta or 0,
                 peca.posicao or "",
                 peca.tag_patrimonio,
-                peca.data_entrada
+                peca.data_entrada,
+                peca.data_reparo,
+                peca.substituido_por
             ))
             criada = True
 
