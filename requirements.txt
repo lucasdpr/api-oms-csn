@@ -7,3 +7,4 @@ sqlalchemy
 psycopg2-binary
 python-dotenv
 bcrypt
+pywebpush==2.0.1
