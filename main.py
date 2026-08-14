@@ -11,6 +11,8 @@ from pydantic import BaseModel
 import psycopg2
 from psycopg2 import pool as psycopg2_pool
 from psycopg2.extras import RealDictCursor
+from pywebpush import webpush, WebPushException
+import json as json_lib
 
 # Carrega variáveis de um arquivo .env quando rodando localmente.
 # No Render, as variáveis já vêm configuradas no ambiente e essa
@@ -42,6 +44,19 @@ if not DATABASE_URL:
         "Variável de ambiente DATABASE_URL não configurada. "
         "Defina ela com a connection string do Neon (veja .env.example)."
     )
+
+# ==========================================
+# 📲 CONFIGURAÇÃO VAPID (Web Push Notification)
+# ==========================================
+# Chaves geradas com gerar_chaves_vapid.py. Sem elas configuradas, o
+# push fica desligado mas o resto do app continua funcionando normal.
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY")
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY")
+VAPID_EMAIL = os.environ.get("VAPID_EMAIL", "mailto:contato@exemplo.com")
+
+PUSH_HABILITADO = bool(VAPID_PRIVATE_KEY and VAPID_PUBLIC_KEY)
+if not PUSH_HABILITADO:
+    print("⚠️ VAPID_PRIVATE_KEY/VAPID_PUBLIC_KEY não configuradas — push notification desativado.")
 
 # ==========================================
 # 🔧 POOL DE CONEXÕES (em vez de abrir uma conexão nova do zero a cada
@@ -167,26 +182,12 @@ def init_db():
         cursor.execute('''
             ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS data_entrada TEXT
         ''')
-        # 🔧 CORREÇÃO: "dataReparo" (quando a peça entrou em Oficina/Reparo,
-        # usado pra contar os dias) e "substituidoPor" (qual peça a
-        # substituiu no veio) só existiam na memória do navegador — nunca
-        # eram salvos aqui. Todo login roda sincronizarAtivosReaisMCC4()
-        # no front, que reconstrói TUDO a partir do que a API devolve; sem
-        # essas colunas, essa reconstrução sempre vinha sem elas, e o
-        # contador de dias "esquecia" quando a peça realmente saiu do veio,
-        # voltando a mostrar um valor congelado/desatualizado.
         cursor.execute('''
             ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS data_reparo TEXT
         ''')
         cursor.execute('''
             ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS substituido_por TEXT
         ''')
-        # 🔧 CORREÇÃO: o campo "Observação" (usado no Sinótico 3D e em
-        # outros lugares) sempre foi mandado pro back-end, mas nunca
-        # existiu de verdade aqui nem no modelo PecaUpdate — o Pydantic
-        # descartava ele silenciosamente, e como às vezes era o ÚNICO
-        # campo enviado, a rota respondia 400 "Nenhum campo para
-        # atualizar foi enviado", e a observação nunca era salva.
         cursor.execute('''
             ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS observacao TEXT
         ''')
@@ -236,19 +237,19 @@ def init_db():
             )
         ''')
 
-        # Senha própria por colaborador (hash, nunca texto puro). No primeiro
-        # acesso, a senha temporária é a própria matrícula; depois do login o
-        # sistema obriga a troca e passa a usar senha_hash.
         cursor.execute('''
             ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS senha_hash TEXT
         ''')
         cursor.execute('''
             ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS primeiro_acesso BOOLEAN DEFAULT TRUE
         ''')
+        # Área do colaborador, usada pra filtrar quem recebe cada tipo de
+        # notificação push (ex: 'Técnico', 'Mecânico', ou 'Ambos' — o
+        # padrão, que recebe tudo).
+        cursor.execute('''
+            ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS area TEXT DEFAULT 'Ambos'
+        ''')
 
-        # Almoxarifado de materiais gerais — antes vivia só no localStorage
-        # do navegador (cada colaborador via um estoque diferente!). Agora
-        # é compartilhado de verdade, igual equipamentos e colaboradores.
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS materiais (
                 codigo TEXT PRIMARY KEY,
@@ -266,13 +267,6 @@ def init_db():
             ALTER TABLE materiais ADD COLUMN IF NOT EXISTS ativo BOOLEAN DEFAULT TRUE
         ''')
 
-        # Rascunho do folhão em andamento. Guarda TODAS as respostas do
-        # formulário (chegada, revisão, saída etc) enquanto o equipamento
-        # está na oficina. Assim um técnico pode preencher a chegada hoje
-        # e outro (ou o mesmo) completar a saída dias depois, sem perder
-        # nada — o rascunho só é apagado quando o folhão é finalizado e
-        # impresso. dados fica em TEXT guardando um JSON serializado com
-        # o valor de cada campo do formulário.
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS folhoes_rascunho (
                 equipamento_id TEXT PRIMARY KEY,
@@ -284,9 +278,6 @@ def init_db():
             )
         ''')
 
-        # Estoque de rolos — antes vivia só no localStorage (cada
-        # colaborador via um saldo diferente). Agora fica no Neon,
-        # igual equipamentos e materiais.
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS rolos (
                 id TEXT PRIMARY KEY,
@@ -297,9 +288,6 @@ def init_db():
             )
         ''')
 
-        # Estoque hidráulico — diferente dos rolos/materiais, guarda DOIS
-        # saldos separados por item: o que está aplicado na máquina
-        # (qtd_aplicado) e o que está de reserva na oficina (qtd_reserva).
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS hidraulica (
                 id TEXT PRIMARY KEY,
@@ -311,8 +299,20 @@ def init_db():
             )
         ''')
 
-        # Semeia os itens padrão (só na primeira vez — se o item já existe,
-        # o ON CONFLICT ignora e mantém o saldo real que já estiver lá).
+        # 📲 Inscrições de push notification (Web Push API). Cada
+        # celular/navegador que aceitar receber notificação gera uma
+        # "subscription" única, salva aqui vinculada à matrícula.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id SERIAL PRIMARY KEY,
+                matricula TEXT NOT NULL,
+                endpoint TEXT NOT NULL UNIQUE,
+                p256dh TEXT NOT NULL,
+                auth TEXT NOT NULL,
+                criado_em TEXT
+            )
+        ''')
+
         cursor.executemany('''
             INSERT INTO rolos (id, nome, conjunto, mcc_compat, qtd)
             VALUES (%s, %s, %s, %s, %s)
@@ -364,6 +364,71 @@ def init_db():
 
 
 init_db()  # Roda na inicialização da API
+
+
+# ==========================================
+# 📲 FUNÇÃO CENTRAL DE ENVIO DE PUSH NOTIFICATION
+# ==========================================
+def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str = "/"):
+    """
+    Manda push notification pra todo mundo inscrito que seja da área
+    informada ('Técnico', 'Mecânico') — quem está com area='Ambos'
+    sempre recebe, seja qual for o filtro pedido.
+
+    Nunca lança exceção pra fora — se o push falhar, só loga o erro;
+    isso NUNCA deve derrubar a rota principal que chamou o envio.
+    """
+    if not PUSH_HABILITADO:
+        return
+
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            if area == "Ambos":
+                cursor.execute("SELECT endpoint, p256dh, auth FROM push_subscriptions")
+            else:
+                cursor.execute("""
+                    SELECT ps.endpoint, ps.p256dh, ps.auth
+                    FROM push_subscriptions ps
+                    JOIN colaboradores c ON c.matricula = ps.matricula
+                    WHERE c.area = %s OR c.area = 'Ambos'
+                """, (area,))
+            inscricoes = cursor.fetchall()
+
+        payload = json_lib.dumps({"titulo": titulo, "corpo": corpo, "url": url})
+
+        endpoints_mortos = []
+        for inscricao in inscricoes:
+            try:
+                webpush(
+                    subscription_info={
+                        "endpoint": inscricao["endpoint"],
+                        "keys": {
+                            "p256dh": inscricao["p256dh"],
+                            "auth": inscricao["auth"]
+                        }
+                    },
+                    data=payload,
+                    vapid_private_key=VAPID_PRIVATE_KEY,
+                    vapid_claims={"sub": VAPID_EMAIL}
+                )
+            except WebPushException as e:
+                if e.response is not None and e.response.status_code in (404, 410):
+                    endpoints_mortos.append(inscricao["endpoint"])
+                else:
+                    print(f"⚠️ Erro ao enviar push: {e}")
+
+        if endpoints_mortos:
+            with get_db() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM push_subscriptions WHERE endpoint = ANY(%s)",
+                    (endpoints_mortos,)
+                )
+                conn.commit()
+    except Exception as e:
+        print(f"⚠️ Falha geral ao processar envio de push: {e}")
+
 
 # ==========================================
 # MODELOS
@@ -448,6 +513,15 @@ class HidraulicaAjuste(BaseModel):
     local: str  # "aplicado" (na máquina) ou "reserva" (oficina)
     fator: float
 
+class PushSubscribe(BaseModel):
+    matricula: str
+    endpoint: str
+    p256dh: str
+    auth: str
+
+class PushUnsubscribe(BaseModel):
+    endpoint: str
+
 # ==========================================
 # ROTAS DA API
 # ==========================================
@@ -466,13 +540,6 @@ def atualizar_peca(peca: PecaUpdate):
     ainda não existir no banco — por exemplo, um slot de Swap que
     nunca teve peça instalada antes, ou uma peça nova cadastrada só
     no navegador — CRIA a linha em vez de devolver 404.
-
-    🔧 CORREÇÃO: antes essa rota só sabia fazer UPDATE. Uma peça sem
-    linha prévia batia com 0 linhas afetadas e o front recebia "Peça
-    'X' não encontrada" — o Swap/instalação funcionava na tela
-    (localStorage), mas nunca persistia no Postgres. Também faltavam
-    tipo/meta/posicao no modelo (PecaUpdate), então mesmo o front já
-    mandando esses campos, eram descartados antes de chegar aqui.
     """
     campos = []
     valores = []
@@ -526,9 +593,6 @@ def atualizar_peca(peca: PecaUpdate):
         criada = False
 
         if cursor.rowcount == 0:
-            # Não existia — cria a linha agora com os dados disponíveis.
-            # ON CONFLICT cobre o caso raro de outra requisição ter
-            # criado a mesma peça entre o UPDATE acima e este INSERT.
             cursor.execute('''
                 INSERT INTO equipamentos (id, tipo, local, status, tonelagem, dias, meta, posicao, tag_patrimonio, data_entrada, data_reparo, substituido_por, observacao)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -569,24 +633,12 @@ def atualizar_peca(peca: PecaUpdate):
 
 @app.post("/api/excluir_peca")
 def excluir_peca(peca: PecaExcluir):
-    """
-    Exclusão permanente de verdade (não é soft-delete como os materiais).
-    🔧 CORREÇÃO: esse endpoint não existia. O botão "Excluir" do front
-    (excluirEquipamento, em ui.js) só tirava a peça do localStorage —
-    parecia funcionar (sumia da tela, dava a mensagem de sucesso), mas
-    nunca mexia no Postgres. Na próxima sincronização (ex: recarregar a
-    página), sincronizarAtivosReaisMCC4() busca tudo nesse banco de novo
-    e a peça, que nunca tinha sido apagada de verdade, voltava a aparecer.
-    """
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM equipamentos WHERE id = %s", (peca.id,))
         if cursor.rowcount == 0:
             conn.rollback()
             raise HTTPException(status_code=404, detail=f"Peça '{peca.id}' não encontrada.")
-        # Limpa também um eventual rascunho de folhão em andamento pra essa
-        # peça — senão fica órfão no banco, referenciando um id que não
-        # existe mais.
         cursor.execute("DELETE FROM folhoes_rascunho WHERE equipamento_id = %s", (peca.id,))
         conn.commit()
 
@@ -618,6 +670,13 @@ def apontar_producao_geral(dados: ProducaoGeral):
         )
         conn.commit()
 
+    # 📲 Notifica todo mundo (área "Ambos") que a produção foi lançada.
+    enviar_push_para_area(
+        titulo="📦 Produção atualizada",
+        corpo=f"{dados.operador} lançou produção geral (MCC2: {dados.qtd_mcc2}t, MCC3: {dados.qtd_mcc3}t, MCC4: {dados.qtd_mcc4}t).",
+        area="Ambos"
+    )
+
     return {"sucesso": True}
 
 
@@ -645,6 +704,12 @@ def apontar_moldes(dados: ApontamentoMoldes):
             (agora, dados.operador, dados.qtd_mcc2, dados.qtd_mcc3, dados.qtd_mcc4)
         )
         conn.commit()
+
+    enviar_push_para_area(
+        titulo="📦 Produção de moldes atualizada",
+        corpo=f"{dados.operador} lançou produção de moldes (MCC2: {dados.qtd_mcc2}, MCC3: {dados.qtd_mcc3}, MCC4: {dados.qtd_mcc4}).",
+        area="Ambos"
+    )
 
     return {"sucesso": True}
 
@@ -736,13 +801,6 @@ def root():
 
 @app.get("/api/ping_db")
 def ping_db():
-    """
-    Rota feita pra ser chamada periodicamente por um serviço externo
-    (ex: cron-job.org) a cada poucos minutos. Diferente da rota "/",
-    que só confirma que a API (Render) está de pé, esta aqui faz uma
-    consulta de verdade no banco (Neon) — é isso que impede o Neon de
-    suspender o banco por inatividade, mesmo com a API sempre ligada.
-    """
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT 1")
@@ -760,6 +818,19 @@ def registrar_evento(evento: EventoLog):
             (agora, evento.operador, evento.peca_id, evento.acao)
         )
         conn.commit()
+
+    # 📲 Dispara push. Eventos com palavras-chave críticas (B.O, quebra,
+    # blackout, fim de vida, alarme) vão pra área "Mecânico"; o resto
+    # (registro comum no equipamento) vai pra "Ambos".
+    PALAVRAS_CRITICAS = ["b.o", "blackout", "quebra", "fim de vida", "alarme"]
+    is_critico = any(p in evento.acao.lower() for p in PALAVRAS_CRITICAS)
+
+    enviar_push_para_area(
+        titulo="🚨 Evento crítico" if is_critico else "📋 Registro no equipamento",
+        corpo=f"{evento.operador} — {evento.peca_id}: {evento.acao}",
+        area="Mecânico" if is_critico else "Ambos"
+    )
+
     return {"sucesso": True}
 
 
@@ -779,11 +850,6 @@ def get_historico_eventos(peca_id: Optional[str] = None, limite: int = 200):
 
 @app.get("/api/colaboradores")
 def get_colaboradores():
-    """
-    Lista os colaboradores autorizados a logar no sistema. Usado apenas
-    para fins administrativos — o login em si é validado pela rota
-    /api/colaboradores/login, que não expõe a lista inteira ao navegador.
-    """
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -794,12 +860,6 @@ def get_colaboradores():
 
 @app.post("/api/colaboradores/login")
 def login_colaborador(dados: LoginColaborador):
-    """
-    Valida matrícula + senha no servidor (nunca no navegador).
-    No primeiro acesso, a senha temporária é a própria matrícula;
-    o front-end deve então chamar /api/colaboradores/definir_senha
-    para cadastrar a senha definitiva.
-    """
     matricula = dados.matricula.strip().upper()
 
     with get_db() as conn:
@@ -836,11 +896,6 @@ def login_colaborador(dados: LoginColaborador):
 
 @app.post("/api/colaboradores/definir_senha")
 def definir_senha_colaborador(dados: DefinirSenhaColaborador):
-    """
-    Cadastra a senha definitiva do colaborador. Só aceita se a senha
-    atual informada bater (seja o primeiro acesso usando a matrícula,
-    seja uma troca posterior usando a senha já cadastrada).
-    """
     matricula = dados.matricula.strip().upper()
 
     if len(dados.nova_senha.strip()) < 4:
@@ -889,10 +944,6 @@ def get_materiais():
 
 @app.post("/api/materiais/cadastrar")
 def cadastrar_material(dados: MaterialCadastro):
-    """
-    Cadastra um material novo, ou soma a quantidade se o código já existir
-    (mesmo comportamento que o front-end tinha localmente antes).
-    """
     codigo = dados.codigo.strip().upper()
     descricao = dados.descricao.strip().upper()
 
@@ -924,10 +975,6 @@ def cadastrar_material(dados: MaterialCadastro):
 
 @app.post("/api/materiais/ajustar")
 def ajustar_material(dados: MaterialAjuste):
-    """
-    Ajusta o saldo de um material (+1/-1 nos botões, ou qualquer fator).
-    Bloqueia se o resultado ficar negativo.
-    """
     codigo = dados.codigo.strip().upper()
 
     with get_db() as conn:
@@ -1015,9 +1062,6 @@ def ajustar_hidraulica(dados: HidraulicaAjuste):
     if dados.local not in ("aplicado", "reserva"):
         raise HTTPException(status_code=400, detail="local precisa ser 'aplicado' ou 'reserva'.")
 
-    # Coluna vem de uma whitelist fixa (nunca do texto puro do usuário),
-    # então não tem risco de SQL injection aqui mesmo montando a query
-    # com f-string.
     coluna = "qtd_aplicado" if dados.local == "aplicado" else "qtd_reserva"
 
     with get_db() as conn:
@@ -1044,11 +1088,6 @@ def ajustar_hidraulica(dados: HidraulicaAjuste):
 # ==========================================
 @app.get("/api/folhao/{equipamento_id}")
 def get_rascunho_folhao(equipamento_id: str):
-    """
-    Retorna o rascunho salvo do folhão daquele equipamento, se existir.
-    Usado ao reabrir o folhão pra continuar de onde parou (ex: já fez a
-    chegada, falta preencher a saída dias depois).
-    """
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -1065,12 +1104,6 @@ def get_rascunho_folhao(equipamento_id: str):
 
 @app.post("/api/folhao/salvar")
 def salvar_rascunho_folhao(dados: FolhaoRascunhoSalvar):
-    """
-    Salva (upsert) o progresso do folhão. Chamado automaticamente
-    conforme o técnico preenche o formulário, então o trabalho nunca é
-    perdido mesmo se ele fechar a aba, trocar de computador ou voltar
-    outro dia pra terminar a saída.
-    """
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     with get_db() as conn:
@@ -1094,11 +1127,6 @@ def salvar_rascunho_folhao(dados: FolhaoRascunhoSalvar):
 
 @app.post("/api/folhao/finalizar")
 def finalizar_rascunho_folhao(dados: FolhaoRascunhoFinalizar):
-    """
-    Apaga o rascunho quando o folhão é finalizado e impresso (o
-    equipamento libera a oficina). Se não existir rascunho, não é erro
-    — só significa que o folhão foi preenchido e impresso de uma vez só.
-    """
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -1107,4 +1135,43 @@ def finalizar_rascunho_folhao(dados: FolhaoRascunhoFinalizar):
         )
         conn.commit()
 
+    return {"sucesso": True}
+
+
+# ==========================================
+# 📲 PUSH NOTIFICATION
+# ==========================================
+@app.get("/api/push/vapid_public_key")
+def get_vapid_public_key():
+    if not PUSH_HABILITADO:
+        raise HTTPException(status_code=503, detail="Push notification não configurado no servidor.")
+    return {"publicKey": VAPID_PUBLIC_KEY}
+
+
+@app.post("/api/push/subscribe")
+def subscribe_push(dados: PushSubscribe):
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO push_subscriptions (matricula, endpoint, p256dh, auth, criado_em)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (endpoint) DO UPDATE SET
+                matricula = EXCLUDED.matricula,
+                p256dh = EXCLUDED.p256dh,
+                auth = EXCLUDED.auth
+            """,
+            (dados.matricula.strip().upper(), dados.endpoint, dados.p256dh, dados.auth, agora)
+        )
+        conn.commit()
+    return {"sucesso": True}
+
+
+@app.post("/api/push/unsubscribe")
+def unsubscribe_push(dados: PushUnsubscribe):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM push_subscriptions WHERE endpoint = %s", (dados.endpoint,))
+        conn.commit()
     return {"sucesso": True}
