@@ -14,14 +14,10 @@ from psycopg2.extras import RealDictCursor
 from pywebpush import webpush, WebPushException
 import json as json_lib
 
-# Carrega variáveis de um arquivo .env quando rodando localmente.
-# No Render, as variáveis já vêm configuradas no ambiente e essa
-# chamada simplesmente não faz nada (não existe .env lá).
 load_dotenv()
 
 app = FastAPI(title="API - Oficina de Moldes CSN")
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,13 +26,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ==========================================
-# 🔥 CONFIGURAÇÃO DO BANCO DE DADOS (via variável de ambiente única)
-# ==========================================
-# IMPORTANTE: nunca coloque a connection string direto no código.
-# Configure essa variável:
-#   - No Render: aba "Environment" do serviço da API.
-#   - Localmente: crie um arquivo .env (nunca commitado) com base no .env.example.
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 if not DATABASE_URL:
@@ -45,11 +34,6 @@ if not DATABASE_URL:
         "Defina ela com a connection string do Neon (veja .env.example)."
     )
 
-# ==========================================
-# 📲 CONFIGURAÇÃO VAPID (Web Push Notification)
-# ==========================================
-# Chaves geradas com gerar_chaves_vapid.py. Sem elas configuradas, o
-# push fica desligado mas o resto do app continua funcionando normal.
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY")
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY")
 VAPID_EMAIL = os.environ.get("VAPID_EMAIL", "mailto:contato@exemplo.com")
@@ -58,24 +42,6 @@ PUSH_HABILITADO = bool(VAPID_PRIVATE_KEY and VAPID_PUBLIC_KEY)
 if not PUSH_HABILITADO:
     print("⚠️ VAPID_PRIVATE_KEY/VAPID_PUBLIC_KEY não configuradas — push notification desativado.")
 
-# ==========================================
-# 🔧 POOL DE CONEXÕES (em vez de abrir uma conexão nova do zero a cada
-# requisição)
-# ==========================================
-# ANTES: get_db() chamava psycopg2.connect(...) toda vez que uma rota
-# era acionada. O problema aparecia logo depois do login: o app dispara
-# várias chamadas quase ao mesmo tempo (equipamentos, rolos, hidráulica,
-# materiais...). Se o Neon ainda estivesse "acordando" naquele instante,
-# cada uma dessas chamadas tentava abrir sua PRÓPRIA conexão nova e
-# esperar o banco acordar por conta própria — várias tentativas de
-# handshake competindo ao mesmo tempo, o que deixava tudo mais lento e
-# fazia algumas chamadas estourarem o timeout mesmo com o retry no
-# front-end, mesmo o banco já tendo "acordado" fisicamente.
-#
-# AGORA: um pool é criado uma única vez quando a API sobe. Toda rota
-# empresta uma conexão já pronta do pool (put/get) em vez de abrir uma
-# nova — só a primeira conexão de verdade precisa esperar o Neon
-# acordar; as demais reaproveitam conexões que já estão de pé.
 db_pool = psycopg2_pool.ThreadedConnectionPool(
     minconn=1,
     maxconn=10,
@@ -87,39 +53,6 @@ db_pool = psycopg2_pool.ThreadedConnectionPool(
 
 @contextmanager
 def get_db():
-    """
-    Empresta uma conexão do pool e garante que ela sempre volta pro
-    pool no final, mesmo se a rota lançar uma exceção no meio do
-    caminho (nunca fecha a conexão de verdade — só devolve pro pool
-    pra outra requisição reaproveitar).
-
-    Se a rota lançar uma exceção no meio de uma transação, faz um
-    rollback antes de devolver a conexão — sem isso, uma transação
-    "presa" nessa conexão contaminaria a PRÓXIMA requisição que
-    reaproveitasse ela do pool (erro tipo "current transaction is
-    aborted"), o que seria pior e mais confuso que abrir uma conexão
-    nova a cada vez.
-
-    🔧 CORREÇÃO ("entra mas o banco não carregou na primeira tentativa"):
-    o Neon suspende o banco por inatividade de forma INDEPENDENTE do
-    Render — mesmo com a API já acordada e respondendo normal (porque
-    alguém acessou há pouco em outro celular), o Neon pode voltar a
-    dormir sozinho enquanto a conexão fica parada, sem uso, dentro do
-    pool. Nesse caso o psycopg2, do lado do Python, continua achando
-    que a conexão está de pé — só descobre que morreu na hora de rodar
-    uma query de verdade. Sem essa checagem, a PRIMEIRA rota a pegar
-    essa conexão "zumbi" batia de frente com o erro e devolvia 500 pro
-    app, mesmo tudo parecendo "ligado". Como o front-end só repete a
-    tentativa em timeout/erro de rede (não em erro 500), isso aparecia
-    como "não carregou" — e só sumia quando o usuário fechava e abria
-    o app de novo (uma requisição nova, por sorte, pegava do pool uma
-    conexão diferente e saudável).
-
-    Agora, antes de entregar a conexão pra rota, faz um teste rápido
-    (SELECT 1). Se falhar, descarta essa conexão específica do pool e
-    pega (ou abre) outra na hora — a rota nunca chega a ver a conexão
-    morta, então o app não precisa mais "tentar de novo" manualmente.
-    """
     conn = db_pool.getconn()
 
     def _descartar_e_pegar_outra():
@@ -155,12 +88,6 @@ def init_db():
     with get_db() as conn:
         cursor = conn.cursor()
 
-        # Nota: identificadores sem aspas no Postgres são sempre convertidos
-        # para minúsculo automaticamente. As colunas abaixo já nascem em
-        # minúsculo por baixo dos panos (id, tipo, local, status,
-        # tonelagem, dias, meta, posicao) — deixamos assim no código pra
-        # não haver ambiguidade entre "como está escrito" e "como o banco
-        # realmente guarda".
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS equipamentos (
                 id TEXT PRIMARY KEY,
@@ -174,23 +101,11 @@ def init_db():
             )
         ''')
 
-        # Guarda o código de patrimônio real da peça física, separado do
-        # id de sistema (que representa a vaga/posição, não a peça).
-        cursor.execute('''
-            ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS tag_patrimonio TEXT
-        ''')
-        cursor.execute('''
-            ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS data_entrada TEXT
-        ''')
-        cursor.execute('''
-            ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS data_reparo TEXT
-        ''')
-        cursor.execute('''
-            ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS substituido_por TEXT
-        ''')
-        cursor.execute('''
-            ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS observacao TEXT
-        ''')
+        cursor.execute('''ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS tag_patrimonio TEXT''')
+        cursor.execute('''ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS data_entrada TEXT''')
+        cursor.execute('''ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS data_reparo TEXT''')
+        cursor.execute('''ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS substituido_por TEXT''')
+        cursor.execute('''ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS observacao TEXT''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS log_apontamento_geral (
@@ -226,8 +141,10 @@ def init_db():
             )
         ''')
 
-        # Colaboradores autorizados a logar no sistema (importados da planilha
-        # de cadastro da CSN + acesso de desenvolvedor).
+        # 📸 Categoria do registro (Melhoria, Intervenção, Comentário,
+        # Atividade Pendente). Guardada direto em log_eventos.
+        cursor.execute('''ALTER TABLE log_eventos ADD COLUMN IF NOT EXISTS categoria TEXT''')
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS colaboradores (
                 matricula TEXT PRIMARY KEY,
@@ -237,18 +154,9 @@ def init_db():
             )
         ''')
 
-        cursor.execute('''
-            ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS senha_hash TEXT
-        ''')
-        cursor.execute('''
-            ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS primeiro_acesso BOOLEAN DEFAULT TRUE
-        ''')
-        # Área do colaborador, usada pra filtrar quem recebe cada tipo de
-        # notificação push (ex: 'Técnico', 'Mecânico', ou 'Ambos' — o
-        # padrão, que recebe tudo).
-        cursor.execute('''
-            ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS area TEXT DEFAULT 'Ambos'
-        ''')
+        cursor.execute('''ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS senha_hash TEXT''')
+        cursor.execute('''ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS primeiro_acesso BOOLEAN DEFAULT TRUE''')
+        cursor.execute('''ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS area TEXT DEFAULT 'Ambos' ''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS materiais (
@@ -257,15 +165,9 @@ def init_db():
                 qtd REAL NOT NULL DEFAULT 0
             )
         ''')
-        cursor.execute('''
-            ALTER TABLE materiais ADD COLUMN IF NOT EXISTS local TEXT
-        ''')
-        cursor.execute('''
-            ALTER TABLE materiais ADD COLUMN IF NOT EXISTS valor_unit REAL
-        ''')
-        cursor.execute('''
-            ALTER TABLE materiais ADD COLUMN IF NOT EXISTS ativo BOOLEAN DEFAULT TRUE
-        ''')
+        cursor.execute('''ALTER TABLE materiais ADD COLUMN IF NOT EXISTS local TEXT''')
+        cursor.execute('''ALTER TABLE materiais ADD COLUMN IF NOT EXISTS valor_unit REAL''')
+        cursor.execute('''ALTER TABLE materiais ADD COLUMN IF NOT EXISTS ativo BOOLEAN DEFAULT TRUE''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS folhoes_rascunho (
@@ -299,9 +201,6 @@ def init_db():
             )
         ''')
 
-        # 📲 Inscrições de push notification (Web Push API). Cada
-        # celular/navegador que aceitar receber notificação gera uma
-        # "subscription" única, salva aqui vinculada à matrícula.
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS push_subscriptions (
                 id SERIAL PRIMARY KEY,
@@ -309,6 +208,17 @@ def init_db():
                 endpoint TEXT NOT NULL UNIQUE,
                 p256dh TEXT NOT NULL,
                 auth TEXT NOT NULL,
+                criado_em TEXT
+            )
+        ''')
+
+        # 📸 Fotos anexadas a registros/intervenções em equipamentos.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS fotos_registro (
+                id SERIAL PRIMARY KEY,
+                evento_id INTEGER REFERENCES log_eventos(id) ON DELETE CASCADE,
+                peca_id TEXT NOT NULL,
+                foto_base64 TEXT NOT NULL,
                 criado_em TEXT
             )
         ''')
@@ -363,21 +273,10 @@ def init_db():
         conn.commit()
 
 
-init_db()  # Roda na inicialização da API
+init_db()
 
 
-# ==========================================
-# 📲 FUNÇÃO CENTRAL DE ENVIO DE PUSH NOTIFICATION
-# ==========================================
 def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str = "/"):
-    """
-    Manda push notification pra todo mundo inscrito que seja da área
-    informada ('Técnico', 'Mecânico') — quem está com area='Ambos'
-    sempre recebe, seja qual for o filtro pedido.
-
-    Nunca lança exceção pra fora — se o push falhar, só loga o erro;
-    isso NUNCA deve derrubar a rota principal que chamou o envio.
-    """
     if not PUSH_HABILITADO:
         return
 
@@ -430,9 +329,6 @@ def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str
         print(f"⚠️ Falha geral ao processar envio de push: {e}")
 
 
-# ==========================================
-# MODELOS
-# ==========================================
 class PecaUpdate(BaseModel):
     id: str
     tipo: Optional[str] = None
@@ -498,7 +394,7 @@ class PecaExcluir(BaseModel):
 class FolhaoRascunhoSalvar(BaseModel):
     equipamento_id: str
     tipo_folhao: str
-    dados: str  # JSON serializado (string) com os valores do formulário
+    dados: str
     etapa: Optional[str] = None
 
 class FolhaoRascunhoFinalizar(BaseModel):
@@ -510,7 +406,7 @@ class RoloAjuste(BaseModel):
 
 class HidraulicaAjuste(BaseModel):
     id: str
-    local: str  # "aplicado" (na máquina) ou "reserva" (oficina)
+    local: str
     fator: float
 
 class PushSubscribe(BaseModel):
@@ -522,9 +418,14 @@ class PushSubscribe(BaseModel):
 class PushUnsubscribe(BaseModel):
     endpoint: str
 
-# ==========================================
-# ROTAS DA API
-# ==========================================
+class RegistroComFoto(BaseModel):
+    peca_id: str
+    acao: str
+    operador: str
+    categoria: str
+    foto_base64: Optional[str] = None
+
+
 @app.get("/api/pecas")
 def get_pecas():
     with get_db() as conn:
@@ -535,51 +436,33 @@ def get_pecas():
 
 @app.post("/api/atualizar_peca")
 def atualizar_peca(peca: PecaUpdate):
-    """
-    Atualiza só os campos que vieram preenchidos no payload. Se o id
-    ainda não existir no banco — por exemplo, um slot de Swap que
-    nunca teve peça instalada antes, ou uma peça nova cadastrada só
-    no navegador — CRIA a linha em vez de devolver 404.
-    """
     campos = []
     valores = []
 
     if peca.tipo is not None:
-        campos.append("tipo = %s")
-        valores.append(peca.tipo)
+        campos.append("tipo = %s"); valores.append(peca.tipo)
     if peca.tonelagem is not None:
-        campos.append("tonelagem = %s")
-        valores.append(peca.tonelagem)
+        campos.append("tonelagem = %s"); valores.append(peca.tonelagem)
     if peca.dias is not None:
-        campos.append("dias = %s")
-        valores.append(peca.dias)
+        campos.append("dias = %s"); valores.append(peca.dias)
     if peca.local is not None:
-        campos.append("local = %s")
-        valores.append(peca.local)
+        campos.append("local = %s"); valores.append(peca.local)
     if peca.status is not None:
-        campos.append("status = %s")
-        valores.append(peca.status)
+        campos.append("status = %s"); valores.append(peca.status)
     if peca.meta is not None:
-        campos.append("meta = %s")
-        valores.append(peca.meta)
+        campos.append("meta = %s"); valores.append(peca.meta)
     if peca.posicao is not None:
-        campos.append("posicao = %s")
-        valores.append(peca.posicao)
+        campos.append("posicao = %s"); valores.append(peca.posicao)
     if peca.tag_patrimonio is not None:
-        campos.append("tag_patrimonio = %s")
-        valores.append(peca.tag_patrimonio)
+        campos.append("tag_patrimonio = %s"); valores.append(peca.tag_patrimonio)
     if peca.data_entrada is not None:
-        campos.append("data_entrada = %s")
-        valores.append(peca.data_entrada)
+        campos.append("data_entrada = %s"); valores.append(peca.data_entrada)
     if peca.data_reparo is not None:
-        campos.append("data_reparo = %s")
-        valores.append(peca.data_reparo)
+        campos.append("data_reparo = %s"); valores.append(peca.data_reparo)
     if peca.substituido_por is not None:
-        campos.append("substituido_por = %s")
-        valores.append(peca.substituido_por)
+        campos.append("substituido_por = %s"); valores.append(peca.substituido_por)
     if peca.observacao is not None:
-        campos.append("observacao = %s")
-        valores.append(peca.observacao)
+        campos.append("observacao = %s"); valores.append(peca.observacao)
 
     if not campos:
         raise HTTPException(status_code=400, detail="Nenhum campo para atualizar foi enviado.")
@@ -610,19 +493,10 @@ def atualizar_peca(peca: PecaUpdate):
                     substituido_por = EXCLUDED.substituido_por,
                     observacao = EXCLUDED.observacao
             ''', (
-                peca.id,
-                peca.tipo or "",
-                peca.local or "",
-                peca.status or "",
-                peca.tonelagem or 0,
-                peca.dias or 0,
-                peca.meta or 0,
-                peca.posicao or "",
-                peca.tag_patrimonio,
-                peca.data_entrada,
-                peca.data_reparo,
-                peca.substituido_por,
-                peca.observacao
+                peca.id, peca.tipo or "", peca.local or "", peca.status or "",
+                peca.tonelagem or 0, peca.dias or 0, peca.meta or 0, peca.posicao or "",
+                peca.tag_patrimonio, peca.data_entrada, peca.data_reparo,
+                peca.substituido_por, peca.observacao
             ))
             criada = True
 
@@ -670,7 +544,6 @@ def apontar_producao_geral(dados: ProducaoGeral):
         )
         conn.commit()
 
-    # 📲 Notifica todo mundo (área "Ambos") que a produção foi lançada.
     enviar_push_para_area(
         titulo="📦 Produção atualizada",
         corpo=f"{dados.operador} lançou produção geral (MCC2: {dados.qtd_mcc2}t, MCC3: {dados.qtd_mcc3}t, MCC4: {dados.qtd_mcc4}t).",
@@ -819,9 +692,6 @@ def registrar_evento(evento: EventoLog):
         )
         conn.commit()
 
-    # 📲 Dispara push. Eventos com palavras-chave críticas (B.O, quebra,
-    # blackout, fim de vida, alarme) vão pra área "Mecânico"; o resto
-    # (registro comum no equipamento) vai pra "Ambos".
     PALAVRAS_CRITICAS = ["b.o", "blackout", "quebra", "fim de vida", "alarme"]
     is_critico = any(p in evento.acao.lower() for p in PALAVRAS_CRITICAS)
 
@@ -929,9 +799,6 @@ def definir_senha_colaborador(dados: DefinirSenhaColaborador):
     return {"sucesso": True}
 
 
-# ==========================================
-# ALMOXARIFADO (compartilhado entre todos os colaboradores)
-# ==========================================
 @app.get("/api/materiais")
 def get_materiais():
     with get_db() as conn:
@@ -1014,9 +881,6 @@ def remover_material(dados: MaterialRemover):
     return {"sucesso": True}
 
 
-# ==========================================
-# ESTOQUE DE ROLOS (compartilhado entre todos os colaboradores)
-# ==========================================
 @app.get("/api/rolos")
 def get_rolos():
     with get_db() as conn:
@@ -1046,9 +910,6 @@ def ajustar_rolo(dados: RoloAjuste):
     return {"sucesso": True, "rolo": atualizado}
 
 
-# ==========================================
-# ESTOQUE HIDRÁULICO (aplicado na máquina x reserva na oficina)
-# ==========================================
 @app.get("/api/hidraulica")
 def get_hidraulica():
     with get_db() as conn:
@@ -1083,9 +944,6 @@ def ajustar_hidraulica(dados: HidraulicaAjuste):
     return {"sucesso": True, "item": atualizado}
 
 
-# ==========================================
-# RASCUNHO DE FOLHÃO (chegada -> saída, persistido entre sessões)
-# ==========================================
 @app.get("/api/folhao/{equipamento_id}")
 def get_rascunho_folhao(equipamento_id: str):
     with get_db() as conn:
@@ -1138,9 +996,6 @@ def finalizar_rascunho_folhao(dados: FolhaoRascunhoFinalizar):
     return {"sucesso": True}
 
 
-# ==========================================
-# 📲 PUSH NOTIFICATION
-# ==========================================
 @app.get("/api/push/vapid_public_key")
 def get_vapid_public_key():
     if not PUSH_HABILITADO:
@@ -1175,3 +1030,81 @@ def unsubscribe_push(dados: PushUnsubscribe):
         cursor.execute("DELETE FROM push_subscriptions WHERE endpoint = %s", (dados.endpoint,))
         conn.commit()
     return {"sucesso": True}
+
+
+# ==========================================
+# 📸 REGISTRO COM FOTO E CATEGORIA
+# ==========================================
+@app.post("/api/registro_com_foto")
+def registrar_com_foto(dados: RegistroComFoto):
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, categoria) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (agora, dados.operador, dados.peca_id, dados.acao, dados.categoria)
+        )
+        evento_id = cursor.fetchone()["id"]
+
+        if dados.foto_base64:
+            cursor.execute(
+                "INSERT INTO fotos_registro (evento_id, peca_id, foto_base64, criado_em) "
+                "VALUES (%s, %s, %s, %s)",
+                (evento_id, dados.peca_id, dados.foto_base64, agora)
+            )
+
+        conn.commit()
+
+    PALAVRAS_CRITICAS = ["b.o", "blackout", "quebra", "fim de vida", "alarme"]
+    is_critico = any(p in dados.acao.lower() for p in PALAVRAS_CRITICAS)
+
+    enviar_push_para_area(
+        titulo="🚨 Evento crítico" if is_critico else f"📋 {dados.categoria}",
+        corpo=f"{dados.operador} — {dados.peca_id}: {dados.acao}",
+        area="Mecânico" if is_critico else "Ambos"
+    )
+
+    return {"sucesso": True, "evento_id": evento_id}
+
+
+@app.get("/api/fotos/{peca_id}")
+def get_fotos_da_peca(peca_id: str):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT f.id, f.foto_base64, f.criado_em, e.data_hora, e.operador, e.acao, e.categoria
+            FROM fotos_registro f
+            JOIN log_eventos e ON e.id = f.evento_id
+            WHERE f.peca_id = %s
+            ORDER BY f.id DESC
+        """, (peca_id,))
+        return cursor.fetchall()
+
+
+@app.get("/api/registros_ocorrencia")
+def get_registros_ocorrencia(categoria: Optional[str] = None, limite: int = 100):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if categoria:
+            cursor.execute("""
+                SELECT e.id, e.data_hora, e.operador, e.peca_id, e.acao, e.categoria,
+                       f.foto_base64
+                FROM log_eventos e
+                LEFT JOIN fotos_registro f ON f.evento_id = e.id
+                WHERE e.categoria = %s
+                ORDER BY e.id DESC
+                LIMIT %s
+            """, (categoria, limite))
+        else:
+            cursor.execute("""
+                SELECT e.id, e.data_hora, e.operador, e.peca_id, e.acao, e.categoria,
+                       f.foto_base64
+                FROM log_eventos e
+                LEFT JOIN fotos_registro f ON f.evento_id = e.id
+                WHERE e.categoria IS NOT NULL
+                ORDER BY e.id DESC
+                LIMIT %s
+            """, (limite,))
+        return cursor.fetchall()
