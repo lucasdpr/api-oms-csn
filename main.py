@@ -236,8 +236,19 @@ def init_db():
                 status TEXT DEFAULT 'Pendente',
                 criado_por TEXT,
                 criado_em TEXT,
-                concluido_em TEXT
+                concluido_em TEXT,
+                foto_base64 TEXT,
+                prazo TEXT
             )
+        ''')
+        # 🔧 Quem já tinha essa tabela criada antes (v1, sem foto/prazo)
+        # ganha as colunas novas aqui — CREATE TABLE IF NOT EXISTS sozinho
+        # não adiciona coluna em tabela que já existe.
+        cursor.execute('''
+            ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS foto_base64 TEXT
+        ''')
+        cursor.execute('''
+            ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS prazo TEXT
         ''')
 
         # 📝 Anotações livres por área (materiais/procedimento — provisório).
@@ -472,6 +483,29 @@ class RegistroComFoto(BaseModel):
 # ==========================================
 # OFICINA — ATIVIDADES POR ÁREA (v1)
 # ==========================================
+# Nome de exibição de cada área — usado só pra deixar o texto da
+# notificação push legível (ex: "hidraulica" -> "Hidráulica"). Precisa
+# bater com as chaves de AREAS_OFICINA no dados.js do front-end.
+AREA_OFICINA_NOMES = {
+    "hidraulica": "Hidráulica",
+    "usinagem": "Usinagem",
+    "caldeiraria": "Caldeiraria",
+    "jato": "Jato",
+    "eletrica": "Elétrica",
+    "adm": "ADM",
+    "logistica": "Logística",
+    "ponte-rolante": "Ponte Rolante",
+    "almoxarifado": "Almoxarifado",
+    "cadeira": "Cadeira (Desempenadeira)",
+    "zero": "Segmento Zero",
+    "segmento-grupo": "Segmento de Grupo (2 e 3)",
+    "mcc4": "MCC4",
+    "bender": "Bender",
+    "molde-mcc4": "Molde MCC #4",
+    "molde-mcc23": "Molde MCC #2,3",
+}
+
+
 class OficinaAtividade(BaseModel):
     area: str
     equipamento_id: Optional[str] = None
@@ -479,6 +513,8 @@ class OficinaAtividade(BaseModel):
     responsavel: Optional[str] = None
     prioridade: Optional[str] = "Normal"
     operador: str
+    foto_base64: Optional[str] = None  # data URL (ex: "data:image/jpeg;base64,...")
+    prazo: Optional[str] = None        # data no formato "YYYY-MM-DD", opcional
 
 
 class OficinaStatus(BaseModel):
@@ -1214,16 +1250,32 @@ def criar_atividade_oficina(dados: OficinaAtividade):
         cursor.execute(
             """
             INSERT INTO oficina_atividades
-                (area, equipamento_id, descricao, responsavel, prioridade, status, criado_por, criado_em)
-            VALUES (%s, %s, %s, %s, %s, 'Pendente', %s, %s)
+                (area, equipamento_id, descricao, responsavel, prioridade, status, criado_por, criado_em, foto_base64, prazo)
+            VALUES (%s, %s, %s, %s, %s, 'Pendente', %s, %s, %s, %s)
             RETURNING id
             """,
             (dados.area, dados.equipamento_id, dados.descricao, dados.responsavel,
-             dados.prioridade or "Normal", dados.operador, agora)
+             dados.prioridade or "Normal", dados.operador, agora, dados.foto_base64, dados.prazo)
         )
         atividade_id = cursor.fetchone()["id"]
         conn.commit()
+
+    # 📲 Avisa quem estiver com push ativado que uma atividade nova
+    # entrou na oficina. Como push_subscriptions hoje só existe pra quem
+    # FAZ LOGIN no sistema (não pra equipe_oficina, que é só roster de
+    # exibição), o alvo é "Ambos" — todo mundo logado com notificação
+    # ligada. Se no futuro os líderes de área tiverem login vinculado à
+    # área, dá pra refinar esse filtro.
+    nome_area = AREA_OFICINA_NOMES.get(dados.area, dados.area)
+    is_alta_prioridade = (dados.prioridade or "Normal") == "Alta"
+    enviar_push_para_area(
+        titulo="🔴 Atividade prioritária na Oficina" if is_alta_prioridade else f"🧰 Nova atividade — {nome_area}",
+        corpo=f"{dados.operador} — {nome_area}: {dados.descricao}",
+        area="Ambos"
+    )
+
     return {"sucesso": True, "id": atividade_id}
+
 
 
 @app.post("/api/oficina/atividade/status")
