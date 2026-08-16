@@ -277,6 +277,35 @@ def init_db():
             )
         ''')
 
+        # 🔩 Materiais técnicos por área — catálogo (código + descrição) do
+        # que aquela área normalmente usa. UNIQUE(area, codigo) evita
+        # duplicar o mesmo item na mesma área se alguém cadastrar 2x.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS materiais_area (
+                id SERIAL PRIMARY KEY,
+                area TEXT NOT NULL,
+                codigo TEXT NOT NULL,
+                descricao TEXT NOT NULL,
+                criado_por TEXT,
+                criado_em TEXT,
+                UNIQUE(area, codigo)
+            )
+        ''')
+
+        # 🌱 Seed único da área "segmento-grupo": já existia uma lista real
+        # de materiais (Grupos 1+2+3, do documento oficial da CSN) usada
+        # no folhão de Segmento Grupo — reaproveitamos aqui como ponto de
+        # partida da aba Oficina. Só roda se a área ainda estiver vazia,
+        # pra não reinserir toda vez que o servidor sobe.
+        cursor.execute("SELECT COUNT(*) as qtd FROM materiais_area WHERE area = 'segmento-grupo'")
+        if cursor.fetchone()["qtd"] == 0:
+            agora_seed = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.executemany('''
+                INSERT INTO materiais_area (area, codigo, descricao, criado_por, criado_em)
+                VALUES ('segmento-grupo', %s, %s, 'Sistema (importado)', %s)
+                ON CONFLICT (area, codigo) DO NOTHING
+            ''', [(codigo, descricao, agora_seed) for codigo, descricao in SEED_MATERIAIS_SEGMENTO_GRUPO])
+
         cursor.executemany('''
             INSERT INTO rolos (id, nome, conjunto, mcc_compat, qtd)
             VALUES (%s, %s, %s, %s, %s)
@@ -486,6 +515,235 @@ class RegistroComFoto(BaseModel):
 # Nome de exibição de cada área — usado só pra deixar o texto da
 # notificação push legível (ex: "hidraulica" -> "Hidráulica"). Precisa
 # bater com as chaves de AREAS_OFICINA no dados.js do front-end.
+# Gerado automaticamente a partir de dadosMateriaisSegmentoGrupo.js (Grupos 1+2+3, deduplicado por codigo)
+SEED_MATERIAIS_SEGMENTO_GRUPO = [
+    ('1010420', 'PINO GRAXEIRO BOTAO ACO NPTF 1/4 "'),
+    ('1027643', 'BUJAO QUAD A105 NPT 3000 3/8 "'),
+    ('1064438', 'CONECTOR COMP LATAO 1/4 "'),
+    ('1064442', 'COTOVELO COMP LATAO 1/4 " 1/4 "'),
+    ('1179315', 'PAPELAO ISOLANTE 1,6X 210X 240MM'),
+    ('1179316', 'PAPELAO ISOLANTE 1,6X 270X 300MM'),
+    ('1190018', 'ANEL RETEN EXT DIN471 70,00X 2,50MM'),
+    ('1190023', 'ANEL RETEN EXT DIN471 50,00X 2,00MM'),
+    ('1195185', 'GRAMPO U 8MM TUBO 1 "'),
+    ('1195298', 'FITA FIBRA ARAMIDA 1,7X 38,1MMX 30M'),
+    ('1203902', 'ARRUELA PRES STANDARD ACO MOLA M24'),
+    ('1204249', 'PARAFUSO SEXT CL4.6 M12X 70MM'),
+    ('1204312', 'PORCA SEXT CL5 MG M16'),
+    ('1204599', 'PARAFUSO SEXT CL4.6 M24X 70MM'),
+    ('1204624', 'PARAFUSO SEXT CL8.8 M12X 30MM'),
+    ('1205001', 'PARAFUSO SEXT CL4.6 M24X 80MM'),
+    ('1205033', 'PARAFUSO SEXT CL4.6 M30X 60MM'),
+    ('1205095', 'PORCA SEXT CL5 MG M8'),
+    ('1205116', 'PARAFUSO ESC CL4.6 M12X 90MM'),
+    ('1205134', 'PARAFUSO CIL CL12.9 M20X 65MM'),
+    ('1205301', 'ARRUELA PRES ACO MOLA M30'),
+    ('1205317', 'ARRUELA PRES ACO MOLA M20'),
+    ('1205361', 'PORCA SEXT CL5 MG M12'),
+    ('1205571', 'PARAFUSO SEXT CL4.6 M16X 190MM'),
+    ('1205593', 'ARRUELA LIS CIRC ACO CARB M12'),
+    ('1205769', 'ARRUELA PRES ACO MOLA M12'),
+    ('1205772', 'ARRUELA PRES ACO MOLA M16'),
+    ('1207628', 'RETENTOR NBR 170,00X 140,00X 14,00MM'),
+    ('1209909', 'ROLAMENTO AUT ROLO 90,00X 160,00MM'),
+    ('1211500', 'ENGATE RAP ROSC LATAO 2 "'),
+    ('1216378', 'BUCHA RED A105 BSP 1/2X 3/8"'),
+    ('1217487', 'PARAFUSO CIL CL10.9 M12X 25MM'),
+    ('1219941', 'ANEL O VITON 8,80X 1,90MM'),
+    ('1221192', 'PARAFUSO SEXT CL4.6 M12X 120MM'),
+    ('1221377', 'PARAFUSO SEXT AISI304 M 8X 50MM'),
+    ('1221385', 'PARAFUSO SEXT AISI316 M12X 30MM'),
+    ('1223257', 'PARAFUSO CIL CL10.9 M12X 50MM'),
+    ('1223278', 'PARAFUSO CIL CL10.9 M24X 90MM'),
+    ('1228240', 'PORCA SEXT CL8 MG M24'),
+    ('1268070', 'ENGATE RAP ROSC ACO CARB 3/8 "'),
+    ('1271352', 'PARAFUSO CIL CL10.9 M16X 65MM'),
+    ('1601922', 'RETENTOR NBR 60,00X 40,00X 8,00MM'),
+    ('1606249', 'ARRUELA PRES AISI304 M12'),
+    ('1617579', 'ANEL O NBR 33,70X 3,50MM'),
+    ('1617598', 'ANEL O NBR 54,60X 5,70MM'),
+    ('1620770', 'PARAFUSO SEXT CL8.8 M16X 35MM'),
+    ('1622643', 'RETENTOR NBR 140,00X 110,00X 14,00MM'),
+    ('1624649', 'TUBO FLEX SANF AISI304 3/4 " 800MM'),
+    ('1624835', 'MANGUEIRA SBR 6,4 X 800MM'),
+    ('1624945', 'TUBO FLEX SANF AISI304 1.1/2 " 900MM'),
+    ('1625069', 'ROLAMENTO AUT ROLO 120,00X 180,00MM'),
+    ('1628930', 'PARAFUSO SEXT AISI304 M16X 90MM'),
+    ('1629283', 'PARAFUSO SEXT AISI304 M20X 70MM'),
+    ('1630487', 'TAMPA HITACHI 0294840 FL H-3510 2'),
+    ('1630742', 'TAMPA HITACHI 0294841 FL H-3511 1'),
+    ('1631445', 'TAMPA HITACHI 0294739 FL H-3504 4'),
+    ('1634947', 'RETENTOR NBR 145,00X 115,00X 14,00MM'),
+    ('1635200', 'PARAFUSO SEXT CL8.8 M20X 45MM'),
+    ('1635659', 'PROTECAO HITACHI 0294878 FL H-3901 7'),
+    ('1635660', 'PROTECAO HITACHI 0294878 FL H-3901 4'),
+    ('1635661', 'PROTECAO HITACHI 0294878 FL H-3901 1'),
+    ('1635721', 'MANCAL HITACHI 2253612 FL H-3502 1'),
+    ('1635722', 'MANCAL HITACHI 2253614 FL H-3505 1'),
+    ('1635732', 'MANCAL HITACHI 2253611 FL H-3501 1'),
+    ('1635733', 'MANCAL HITACHI 2253613 FL H-3503 1'),
+    ('1635734', 'MANCAL HITACHI 0294739 FL H-3504 1'),
+    ('1636098', 'ESPACADOR HITACHI 0294840 FL H-3510 4'),
+    ('1638483', 'RETENTOR SBR 90,00X 70,00X 12,00MM'),
+    ('1638492', 'RETENTOR SBR 200,00X 160,00X 15,00MM'),
+    ('1638493', 'RETENTOR SBR 200,00X 170,00X 16,00MM'),
+    ('1638571', 'ROLAMENTO AUT ROLO 150,00X 225,00MM'),
+    ('1638572', 'ROLAMENTO AUT ROLO 130,00X 210,00MM'),
+    ('1638677', 'PARAFUSO SEXT CL4.6 M12X 190MM'),
+    ('1638717', 'ROLAMENTO ROLO CIL 150,00X 225,00MM'),
+    ('1638721', 'ARRUELA TRAVA ROLAM 2,00X 145MM'),
+    ('1638724', 'PARAFUSO SEXT CL4.6 M12X 180MM'),
+    ('1638725', 'PORCA FIX ROLAM M145X2'),
+    ('1638726', 'PORCA FIX ROLAM M115X2'),
+    ('1638727', 'ARRUELA TRAVA ROLAM 2,00X 115MM'),
+    ('1639149', 'BUCHA HITACHI 0294840 FL H-3510 3'),
+    ('1639385', 'PROTECAO HITACHI 0294879 FL H-3902'),
+    ('1639386', 'TAMPA HITACHI 0294848 FL H-3520 8'),
+    ('1639495', 'BUCHA HITACHI 0294841 FL H-3511 5'),
+    ('1639496', 'ESPACADOR HITACHI 0294841 FL H-3511 10'),
+    ('1639500', 'ESPACADOR HITACHI 0294841 FL H-3511 7'),
+    ('1639501', 'ESPACADOR HITACHI 0294841 FL H-3511 3'),
+    ('1639606', 'CHAVETA HITACHI 0294795 FL H3101 2'),
+    ('1639630', 'ESPACADOR HITACHI 0294843 FL H-3513 19'),
+    ('1639778', 'ESPELHO HITACHI 2256062 FL H-3518 4'),
+    ('1639780', 'BUCHA HITACHI 0294847 FL H-3519 4'),
+    ('1640577', 'BUCHA HITACHI 0296769 FL J-3507 7'),
+    ('1640582', 'MANCAL HITACHI 0294049 FL J-3505 1'),
+    ('1640662', 'TAMPA HITACHI 0294740 FL H-3509 4'),
+    ('1640663', 'TAMPA HITACHI 0294740 FL H-3509 5'),
+    ('1640664', 'MANCAL HITACHI 0294740 FL H-3509 1'),
+    ('1640665', 'MANCAL HITACHI 0294736 FL H-3508 1'),
+    ('1640667', 'BUCHA HITACHI 0294845 FL H-3516 1'),
+    ('1640668', 'BUCHA HITACHI 0294845 FL H-3516 2'),
+    ('1640670', 'MANCAL HITACHI 2253616 FL H-3507 1'),
+    ('1640671', 'MANCAL HITACHI 2253615 FL H-3506 1'),
+    ('1640673', 'BUCHA HITACHI 0294844 FL H-3515 2'),
+    ('1640674', 'CHAVETA HITACHI 0294796 FL H3102 2'),
+    ('1640675', 'ESPACADOR HITACHI 0294846 FL H-3517 8'),
+    ('1640676', 'ESPACADOR HITACHI 0294846 FL H-3517 7'),
+    ('1640677', 'BUCHA HITACHI 0294841 FL H-3511 6'),
+    ('1641054', 'ABRACADEIRA BIPARTIDA PP 20,0MM'),
+    ('1641290', 'ROLO HITACHI 0294737 FL H-3203 1'),
+    ('1641291', 'ROLO HITACHI 0294065 FL H-3201 1'),
+    ('1641292', 'ROLO HITACHI 0294066 FL H-3202 1'),
+    ('1641293', 'ROLO HITACHI 0294795 FL H-3101 01, 04'),
+    ('1641294', 'ROLO HITACHI 0294797 FL H-3103 1'),
+    ('1641558', 'ROLO HITACHI 0294796 FL H-3102 01, 04'),
+    ('1641559', 'TAMPA HITACHI 2256061 FL H-3514 1'),
+    ('1641567', 'ESPACADOR HITACHI 2256061 FL H-3514 3'),
+    ('1644361', 'TAMPA HITACHI 0294847 FL H-3519 1'),
+    ('1644362', 'ESPACADOR HITACHI 0294846 FL H-3517 6'),
+    ('1660669', 'ABRACADEIRA BIPARTIDA PP 12,MM'),
+    ('1664836', 'RESFRIADOR HITACHI 0295344 FL H-5102'),
+    ('1664838', 'RESFRIADOR HITACHI 0295344 FL H-5102'),
+    ('1664839', 'RESFRIADOR HITACHI 0295343 FL H-5101'),
+    ('1664840', 'RESFRIADOR HITACHI 0295343 FL H-5101'),
+    ('1664841', 'RESFRIADOR HITACHI 0295345 FL H-5103'),
+    ('1664842', 'RESFRIADOR HITACHI 0295345 FL H-5103'),
+    ('1667375', 'GUIA HITACHI 0294842 FL H-3512 2'),
+    ('1667376', 'GUIA HITACHI 0294842 FL H-3512 1'),
+    ('1667377', 'PINO HITACHI 0294846 FL H-3517 2'),
+    ('1667378', 'BLOCO HITACHI 0294846 FL H-3517 1'),
+    ('1668393', 'GUIA HITACHI 0294736 11'),
+    ('1668394', 'GUIA HITACHI 0294736 12'),
+    ('1668395', 'GUIA HITACHI 0294736 6'),
+    ('1668396', 'GUIA HITACHI 0294736 7'),
+    ('1672218', 'PROTECAO HITACHI 0294879 FL H-3902 4'),
+    ('1672219', 'PROTECAO HITACHI 0294879 FL H-3902 7'),
+    ('1672220', 'PROTECAO HITACHI 0294879 FL H-3902 1'),
+    ('1672221', 'PROTECAO HITACHI 0294880 FL H-3903 1'),
+    ('1672222', 'PROTECAO HITACHI 0294880 FL H-3903 4'),
+    ('1672223', 'PROTECAO HITACHI 0294880 FL H-3903 7'),
+    ('1674830', 'BUCHA HITACHI 0294858 FL H-4401 10'),
+    ('1674831', 'BUCHA HITACHI 0294858 FL H-4401 9'),
+    ('1674832', 'BUCHA HITACHI 0294859 FL H-4402 9'),
+    ('1674833', 'BUCHA HITACHI 0294859 FL H-4402 10'),
+    ('1681354', 'ARRUELA PRES AISI304 M20'),
+    ('1726447', 'UNIAO A182 304 SW 3000 3/8 "'),
+    ('1726448', 'TE A182 304 SW 3000 3/8 "'),
+    ('1726708', 'COTOVELO COMP INOX 3/8 " 12,0MM'),
+    ('1728817', 'COTOVELO HITACHI 2271315 7'),
+    ('1728820', 'COTOVELO HITACHI 2271315 4'),
+    ('1729413', 'GUIA CSN SL08373 C'),
+    ('1729414', 'GUIA CSN SL08373 B'),
+    ('1729415', 'GUIA CSN SL08373 A'),
+    ('1729419', 'HASTE HITACHI 0294859 5'),
+    ('1740514', 'ESTRUTURA HITACHI 2245054 1'),
+    ('1767804', 'TAMPA TOPC TOM00002 11'),
+    ('1767805', 'ESPELHO CSN TOM00002 13'),
+    ('1767806', 'BUCHA CSN TOM00002 12'),
+    ('1777216', 'RESFRIADOR TOPC TOT00025'),
+    ('1777217', 'RESFRIADOR TOPC TOT00025'),
+    ('1777218', 'RESFRIADOR TOPC TOT00026'),
+    ('1777219', 'RESFRIADOR TOPC TOT00026'),
+    ('1779031', 'PONTA HITACHI 0295345 FL H-5103'),
+    ('1779032', 'PONTA HITACHI 0295343 FL H-5101'),
+    ('1779033', 'PONTA HITACHI 0295343 FL H-5101'),
+    ('1779034', 'PINO HITACHI 0294841 FL H-3511 12'),
+    ('1779035', 'PONTA HITACHI 0295344 FL H-5102'),
+    ('1779037', 'PONTA HITACHI 0295345 FL H-5103'),
+    ('1779127', 'PARAFUSO CIL CL8.8 M16X 60MM'),
+    ('1779128', 'PARAFUSO CIL CL8.8 M12X 35MM'),
+    ('1779153', 'PARAFUSO CIL CL8.8 M16X 40MM'),
+    ('1779161', 'DISTRIBUIDOR GRAXA 3/8 X1/4" NPT 12SAID'),
+    ('1779162', 'DISTRIBUIDOR GRAXA 3/8 X1/4" NPT 10SAID'),
+    ('1790098', 'CONECTOR COMP AISI316 3/8 " 12,0MM'),
+    ('8001279', 'PORCA DYNAR IEP12L PARA TUBO 12MM'),
+    ('8003284', 'CONECTOR COMP INOX 1/4 " 10,0MM'),
+    ('8003514', 'TUBO A312 PLN 2,0 MM 10 MM'),
+    ('8005265', 'CHAVETA HITACHI 0294751 3'),
+    ('8005890', 'PARAFUSO CIL CL10.9 M12X 85MM'),
+    ('8006731', 'BLOCO HITACHI 2268134 FL H5314 A'),
+    ('8008877', 'BUCHA CSN DM028280 1'),
+    ('8010560', 'ESPACADOR HITACHI 0294841 8'),
+    ('8010827', 'BATENTE HITACHI 0294845 3'),
+    ('8023215', 'BUJAO SEXT INT ACO CARB BSP 1/4 "'),
+    ('8023495', 'PONTA HITACHI 0295344 FL H-5102'),
+    ('8028816', 'ESPACADOR HITACHI 0294841 4'),
+    ('8029310', 'PARAFUSO CIL CL12.9 M10X 80MM'),
+    ('8029315', 'PARAFUSO CIL CL12.9 M16X 70MM'),
+    ('8029318', 'PARAFUSO CIL CL12.9 M20X 65MM'),
+    ('8029319', 'PARAFUSO CIL CL12.9 M22X 100MM'),
+    ('8029330', 'PARAFUSO CIL CL12.9 M22X 150MM'),
+    ('8040801', 'BLOCO CSN DM048964 1'),
+    ('8042163', 'COTOVELO COMP ACO CARB 1/4 " 10,0MM'),
+    ('8131681', 'GRAXA GPU310PTA MINERAL NLGI 1 180 KG'),
+    ('8271759', 'PORCA SEXT STANDA CL10 MG M20'),
+    ('8287526', 'TUBO CU-DHP PLN 0,7 MM 6 MM'),
+    ('8288919', 'CONECTOR COMP LATAO 1/4 " 1/4 "'),
+    ('8297848', 'COTOVELO M/F ACO 1/4 "'),
+    ('8500119', 'PINO HITACHI 189601 13'),
+    ('8672336', 'ARRUELA PRES STANDARD AISI316 5/8 "'),
+    ('8734948', 'HASTE HITACHI 0294858 5 ATE 8'),
+    ('8739547', 'ESPACADOR HITACHI 0294845 14'),
+    ('8741139', 'ROLAMENTO ROLO CIL 120,00X 180,00MM'),
+    ('8742789', 'LUVA 3/8" INOX ROSCA/SOLDA - NPT'),
+    ('9120417', 'MANCAL HITACHI 0294858 1'),
+    ('9120418', 'MANCAL HITACHI 0294859 1'),
+    ('9137818', 'ACOPLAMENTO PRIMETALS PMVROSME000100301'),
+    ('9137819', 'ACOPLAMENTO PRIMETALS PMVROSME000100401'),
+    ('9140829', 'RESFRIADOR HITACHI ZOSEN 0295218'),
+    ('9140945', 'PORCA CSN DM613216 2'),
+    ('9140946', 'CORPO CSN DM613216 1'),
+    ('9141175', 'RESFRIADOR HITACHI ZOSEN 0295218'),
+    ('9142429', 'CILINDRO HIDR DUPL/ACAO 15MM/ 260MM'),
+    ('9146801', 'CILINDRO HIDR DUPL/ACAO 25MM/ 250MM'),
+    ('9147671', 'VALVULA ALIV ROSCA M20X1,5 630BAR'),
+    ('9155910', 'CILINDRO HIDR DUPL/ACAO 100MM/ 125MM'),
+    ('9156000', 'CILINDRO HIDR DUPL/ACAO 100MM/ 100MM'),
+    ('9156568', 'CILINDRO HIDR DUPL/ACAO 100MM/ 140MM'),
+    ('9158654', 'PARAFUSO SEXT CL5.8 M12X 140MM'),
+    ('9158800', 'JUNTA DEUBLIN 2412004145174IC'),
+    ('9186514', 'CALCO HITACHI 0294736 8'),
+    ('9220402', 'VALVULA RET HIDR CARTUCHO'),
+    ('9259157', 'MANGUEIRA NBR 6,4 X 600MM'),
+    ('9264172', 'MANGUEIRA NBR 6,4 X 1000MM'),
+    ('9265400', 'MANGUEIRA NBR 10,0 X 1000MM'),
+    ('9272309', 'PONTA SPRAYING SYSTEMS 470462B 1480'),
+    ('9321450', 'PONTA SPRAYING SYSTEMS 470462B 1780'),
+    ('9409100', 'CHAVETA HITACHI 2256061 6'),
+]
+
 AREA_OFICINA_NOMES = {
     "hidraulica": "Hidráulica",
     "usinagem": "Usinagem",
@@ -530,6 +788,27 @@ class OficinaNota(BaseModel):
     area: str
     texto: str
     operador: Optional[str] = None
+
+
+class OficinaMaterial(BaseModel):
+    area: str
+    codigo: str
+    descricao: str
+    operador: Optional[str] = None
+
+
+class OficinaMaterialExcluir(BaseModel):
+    id: int
+
+
+class OficinaAtividadeEditar(BaseModel):
+    id: int
+    equipamento_id: Optional[str] = None
+    descricao: str
+    responsavel: Optional[str] = None
+    prioridade: Optional[str] = "Normal"
+    prazo: Optional[str] = None
+    foto_base64: Optional[str] = None  # null = sem foto anexada / mantém a que já tinha, ver rota
 
 
 @app.get("/api/pecas")
@@ -1351,3 +1630,74 @@ def get_equipe_area_oficina(area: str):
             (area,)
         )
         return cursor.fetchall()
+
+
+# ==========================================
+# OFICINA — MATERIAIS POR ÁREA
+# ==========================================
+@app.get("/api/oficina/materiais/{area}")
+def get_materiais_area_oficina(area: str):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, codigo, descricao FROM materiais_area WHERE area = %s ORDER BY descricao",
+            (area,)
+        )
+        return cursor.fetchall()
+
+
+@app.post("/api/oficina/materiais")
+def criar_material_area_oficina(dados: OficinaMaterial):
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO materiais_area (area, codigo, descricao, criado_por, criado_em)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (area, codigo) DO UPDATE SET descricao = EXCLUDED.descricao
+            RETURNING id
+            """,
+            (dados.area, dados.codigo.strip(), dados.descricao.strip(), dados.operador, agora)
+        )
+        material_id = cursor.fetchone()["id"]
+        conn.commit()
+    return {"sucesso": True, "id": material_id}
+
+
+@app.post("/api/oficina/materiais/excluir")
+def excluir_material_area_oficina(dados: OficinaMaterialExcluir):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM materiais_area WHERE id = %s", (dados.id,))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Material não encontrado.")
+        conn.commit()
+    return {"sucesso": True}
+
+
+# ==========================================
+# OFICINA — EDITAR ATIVIDADE
+# ==========================================
+@app.post("/api/oficina/atividade/editar")
+def editar_atividade_oficina(dados: OficinaAtividadeEditar):
+    """Edita os campos de uma atividade já lançada. Área, status e
+    autoria original não mudam aqui — só descrição/equipamento/
+    responsável/prioridade/prazo/foto. Pra mudar status, usa a rota
+    /api/oficina/atividade/status."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE oficina_atividades
+            SET equipamento_id = %s, descricao = %s, responsavel = %s,
+                prioridade = %s, prazo = %s, foto_base64 = %s
+            WHERE id = %s
+            """,
+            (dados.equipamento_id, dados.descricao, dados.responsavel,
+             dados.prioridade or "Normal", dados.prazo, dados.foto_base64, dados.id)
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Atividade não encontrada.")
+        conn.commit()
+    return {"sucesso": True}
