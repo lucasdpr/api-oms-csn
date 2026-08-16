@@ -223,6 +223,49 @@ def init_db():
             )
         ''')
 
+        # 🧰 Atividades das áreas da oficina — cada linha é 1 tarefa,
+        # vinculada a um equipamento OU avulsa (equipamento_id = NULL).
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS oficina_atividades (
+                id SERIAL PRIMARY KEY,
+                area TEXT NOT NULL,
+                equipamento_id TEXT,
+                descricao TEXT NOT NULL,
+                responsavel TEXT,
+                prioridade TEXT DEFAULT 'Normal',
+                status TEXT DEFAULT 'Pendente',
+                criado_por TEXT,
+                criado_em TEXT,
+                concluido_em TEXT
+            )
+        ''')
+
+        # 📝 Anotações livres por área (materiais/procedimento — provisório).
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS oficina_notas_area (
+                area TEXT PRIMARY KEY,
+                texto TEXT,
+                atualizado_por TEXT,
+                atualizado_em TEXT
+            )
+        ''')
+
+        # 👥 Equipe da oficina (mecânicos, eletricistas etc. — quem NÃO é
+        # liderança), importada da planilha do efetivo. Cada pessoa fica
+        # vinculada a UMA área (a mesma chave usada em oficina_atividades
+        # e no AREAS_OFICINA do dados.js). Tabela separada de
+        # "colaboradores" de propósito — essa é só um roster de exibição,
+        # sem login/senha, não mistura com quem acessa o sistema.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS equipe_oficina (
+                matricula TEXT PRIMARY KEY,
+                nome TEXT NOT NULL,
+                cargo TEXT,
+                area TEXT NOT NULL,
+                ativo BOOLEAN DEFAULT TRUE
+            )
+        ''')
+
         cursor.executemany('''
             INSERT INTO rolos (id, nome, conjunto, mcc_compat, qtd)
             VALUES (%s, %s, %s, %s, %s)
@@ -424,6 +467,33 @@ class RegistroComFoto(BaseModel):
     operador: str
     categoria: str
     foto_base64: Optional[str] = None
+
+
+# ==========================================
+# OFICINA — ATIVIDADES POR ÁREA (v1)
+# ==========================================
+class OficinaAtividade(BaseModel):
+    area: str
+    equipamento_id: Optional[str] = None
+    descricao: str
+    responsavel: Optional[str] = None
+    prioridade: Optional[str] = "Normal"
+    operador: str
+
+
+class OficinaStatus(BaseModel):
+    id: int
+    status: str  # "Pendente" | "Em Andamento" | "Concluído"
+
+
+class OficinaExcluir(BaseModel):
+    id: int
+
+
+class OficinaNota(BaseModel):
+    area: str
+    texto: str
+    operador: Optional[str] = None
 
 
 @app.get("/api/pecas")
@@ -1107,4 +1177,125 @@ def get_registros_ocorrencia(categoria: Optional[str] = None, limite: int = 100)
                 ORDER BY e.id DESC
                 LIMIT %s
             """, (limite,))
+        return cursor.fetchall()
+
+
+# ==========================================
+# OFICINA — ATIVIDADES POR ÁREA (v1)
+# ==========================================
+@app.get("/api/oficina/atividades")
+def listar_atividades_oficina(area: Optional[str] = None, status: Optional[str] = None):
+    """
+    Lista as atividades da oficina. Sem filtro, traz TUDO — a grade de
+    áreas no front-end filtra por área no próprio navegador (evita uma
+    chamada de API por card). Os filtros opcionais ficam disponíveis
+    caso precise no futuro (ex: um relatório só de pendências).
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        query = "SELECT * FROM oficina_atividades WHERE 1=1"
+        params = []
+        if area:
+            query += " AND area = %s"
+            params.append(area)
+        if status:
+            query += " AND status = %s"
+            params.append(status)
+        query += " ORDER BY id DESC"
+        cursor.execute(query, params)
+        return cursor.fetchall()
+
+
+@app.post("/api/oficina/atividade")
+def criar_atividade_oficina(dados: OficinaAtividade):
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO oficina_atividades
+                (area, equipamento_id, descricao, responsavel, prioridade, status, criado_por, criado_em)
+            VALUES (%s, %s, %s, %s, %s, 'Pendente', %s, %s)
+            RETURNING id
+            """,
+            (dados.area, dados.equipamento_id, dados.descricao, dados.responsavel,
+             dados.prioridade or "Normal", dados.operador, agora)
+        )
+        atividade_id = cursor.fetchone()["id"]
+        conn.commit()
+    return {"sucesso": True, "id": atividade_id}
+
+
+@app.post("/api/oficina/atividade/status")
+def mudar_status_atividade_oficina(dados: OficinaStatus):
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    concluido_em = agora if dados.status == "Concluído" else None
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE oficina_atividades SET status = %s, concluido_em = %s WHERE id = %s",
+            (dados.status, concluido_em, dados.id)
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Atividade não encontrada.")
+        conn.commit()
+    return {"sucesso": True}
+
+
+@app.post("/api/oficina/atividade/excluir")
+def excluir_atividade_oficina(dados: OficinaExcluir):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM oficina_atividades WHERE id = %s", (dados.id,))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Atividade não encontrada.")
+        conn.commit()
+    return {"sucesso": True}
+
+
+@app.get("/api/oficina/nota/{area}")
+def get_nota_area_oficina(area: str):
+    """404 = área ainda sem anotações — é normal, o front trata como
+    campo vazio."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM oficina_notas_area WHERE area = %s", (area,))
+        nota = cursor.fetchone()
+        if not nota:
+            raise HTTPException(status_code=404, detail="Sem anotações ainda para essa área.")
+        return nota
+
+
+@app.post("/api/oficina/nota")
+def salvar_nota_area_oficina(dados: OficinaNota):
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO oficina_notas_area (area, texto, atualizado_por, atualizado_em)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (area) DO UPDATE SET
+                texto = EXCLUDED.texto,
+                atualizado_por = EXCLUDED.atualizado_por,
+                atualizado_em = EXCLUDED.atualizado_em
+            """,
+            (dados.area, dados.texto, dados.operador, agora)
+        )
+        conn.commit()
+    return {"sucesso": True}
+
+
+@app.get("/api/oficina/equipe/{area}")
+def get_equipe_area_oficina(area: str):
+    """Lista os colaboradores (mecânicos, eletricistas etc.) cadastrados
+    naquela área da oficina — vem da planilha do efetivo, importada via
+    importar_efetivo_oficina.py. Usado na seção 'Equipe da Área' do
+    modal de cada área."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT matricula, nome, cargo FROM equipe_oficina WHERE area = %s AND ativo = TRUE ORDER BY nome",
+            (area,)
+        )
         return cursor.fetchall()
