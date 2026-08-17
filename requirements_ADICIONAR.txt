@@ -1,2 +1,0 @@
-# Adicione essa linha no seu requirements.txt existente:
-pywebpush==2.0.1
