@@ -524,6 +524,28 @@ def init_db():
             )
         ''')
 
+        # 📋 Execuções de procedimento (checklist). Os procedimentos em si
+        # (passo a passo, EPIs, ferramentas) ficam definidos como dados
+        # estáticos no front-end (procedimentosOficina.js) — aqui só fica
+        # o REGISTRO de cada vez que alguém executou um, com quais etapas
+        # foram marcadas como feitas. "etapas_marcadas" guarda uma lista
+        # em JSON com os IDs das etapas concluídas (ex: ["1.1","1.2"]),
+        # pra permitir consultar depois quais passos foram (ou não)
+        # cumpridos numa execução específica.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS procedimentos_execucoes (
+                id SERIAL PRIMARY KEY,
+                area TEXT NOT NULL,
+                procedimento_id TEXT NOT NULL,
+                procedimento_nome TEXT,
+                operador TEXT,
+                etapas_marcadas TEXT,
+                total_etapas INTEGER,
+                concluido BOOLEAN DEFAULT FALSE,
+                data_hora TEXT
+            )
+        ''')
+
         # 🌱 Seed único da área "segmento-grupo": já existia uma lista real
         # de materiais (Grupos 1+2+3, do documento oficial da CSN) usada
         # no folhão de Segmento Grupo — reaproveitamos aqui como ponto de
@@ -802,6 +824,16 @@ class OficinaMaterial(BaseModel):
 
 class OficinaMaterialExcluir(BaseModel):
     id: int
+
+
+class ProcedimentoExecucao(BaseModel):
+    area: str
+    procedimento_id: str
+    procedimento_nome: Optional[str] = None
+    etapas_marcadas: list = []
+    total_etapas: Optional[int] = None
+    concluido: bool = False
+    operador: Optional[str] = None
 
 
 class OficinaAtividadeEditar(BaseModel):
@@ -1704,3 +1736,85 @@ def editar_atividade_oficina(dados: OficinaAtividadeEditar):
             raise HTTPException(status_code=404, detail="Atividade não encontrada.")
         conn.commit()
     return {"sucesso": True}
+
+# ==========================================
+# PROCEDIMENTOS (checklist de etapas por área)
+# ==========================================
+# O conteúdo do procedimento (passo a passo, EPIs, ferramentas) fica
+# como dado estático no front-end (procedimentosOficina.js) — aqui só
+# fica o REGISTRO de cada execução: quem fez, quando, e quais etapas
+# foram marcadas. Isso permite auditar depois (ex: "esse procedimento
+# foi mesmo seguido por completo na última execução?").
+@app.post("/api/oficina/procedimento/executar")
+def registrar_execucao_procedimento(dados: ProcedimentoExecucao):
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO procedimentos_execucoes
+                (area, procedimento_id, procedimento_nome, operador, etapas_marcadas, total_etapas, concluido, data_hora)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (
+                dados.area,
+                dados.procedimento_id,
+                dados.procedimento_nome,
+                dados.operador,
+                json_lib.dumps(dados.etapas_marcadas),
+                dados.total_etapas,
+                dados.concluido,
+                agora,
+            )
+        )
+        execucao_id = cursor.fetchone()["id"]
+        conn.commit()
+
+    # Só registra no histórico do log geral (Auditoria) quando o técnico
+    # de fato concluiu todas as etapas — execuções parciais (ex: ele só
+    # queria salvar o progresso e continuar depois) não geram um evento
+    # de "procedimento concluído" na Auditoria.
+    if dados.concluido:
+        try:
+            cursor.execute(
+                "INSERT INTO log_eventos (data_hora, operador, peca_id, acao) VALUES (%s, %s, %s, %s)",
+                (agora, dados.operador or "Sistema", f"OFICINA-{dados.area.upper()}",
+                 f"📋 Procedimento concluído: {dados.procedimento_nome or dados.procedimento_id}")
+            )
+            conn.commit()
+        except Exception as e:
+            print(f"⚠️ Não consegui registrar o log de conclusão do procedimento: {e}")
+
+    return {"sucesso": True, "id": execucao_id}
+
+
+@app.get("/api/oficina/procedimento/historico/{area}")
+def historico_execucoes_procedimento(area: str, procedimento_id: Optional[str] = None, limite: int = 20):
+    """Últimas execuções de procedimentos de uma área — usado pra mostrar
+    'última vez que isso foi feito, e por quem' na tela do procedimento."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if procedimento_id:
+            cursor.execute(
+                """
+                SELECT id, procedimento_id, procedimento_nome, operador, etapas_marcadas,
+                       total_etapas, concluido, data_hora
+                FROM procedimentos_execucoes
+                WHERE area = %s AND procedimento_id = %s
+                ORDER BY id DESC LIMIT %s
+                """,
+                (area, procedimento_id, limite)
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id, procedimento_id, procedimento_nome, operador, etapas_marcadas,
+                       total_etapas, concluido, data_hora
+                FROM procedimentos_execucoes
+                WHERE area = %s
+                ORDER BY id DESC LIMIT %s
+                """,
+                (area, limite)
+            )
+        return cursor.fetchall()
