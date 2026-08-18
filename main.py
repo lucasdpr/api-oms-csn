@@ -1681,6 +1681,19 @@ def get_equipe_area_oficina(area: str):
 # ==========================================
 # OFICINA — MATERIAIS POR ÁREA
 # ==========================================
+@app.get("/api/oficina/materiais_todos")
+def get_materiais_todas_areas():
+    """Lista os materiais técnicos de TODAS as áreas de uma vez, cada um
+    já com a área a que pertence — usado no Catálogo geral (busca única
+    em vez de precisar abrir área por área)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, area, codigo, descricao FROM materiais_area ORDER BY area, descricao"
+        )
+        return cursor.fetchall()
+
+
 @app.get("/api/oficina/materiais/{area}")
 def get_materiais_area_oficina(area: str):
     with get_db() as conn:
