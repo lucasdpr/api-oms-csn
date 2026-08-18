@@ -338,6 +338,13 @@ def init_db():
         cursor.execute('''ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS data_reparo TEXT''')
         cursor.execute('''ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS substituido_por TEXT''')
         cursor.execute('''ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS observacao TEXT''')
+        # 🆕 ROLOS TRAVADOS: guarda um JSON (texto) com a lista de rolos
+        # marcados como travados nesta peça, ex: '["S-4","I-2"]'. Só se
+        # aplica a equipamentos com rolos (Horizontal, Bender, Zero,
+        # Segmento de Grupo, Bow) — o layout de cada um (quantos rolos,
+        # base superior/inferior, qual é o acionado) fica no front-end
+        # (dados.js -> LAYOUT_ROLOS_POR_TIPO), aqui é só texto livre.
+        cursor.execute('''ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS rolos_travados TEXT''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS log_apontamento_geral (
@@ -680,6 +687,7 @@ class PecaUpdate(BaseModel):
     data_reparo: Optional[str] = None
     substituido_por: Optional[str] = None
     observacao: Optional[str] = None
+    rolos_travados: Optional[str] = None
 
 class ProducaoGeral(BaseModel):
     operador: str
@@ -883,6 +891,8 @@ def atualizar_peca(peca: PecaUpdate):
         campos.append("substituido_por = %s"); valores.append(peca.substituido_por)
     if peca.observacao is not None:
         campos.append("observacao = %s"); valores.append(peca.observacao)
+    if peca.rolos_travados is not None:
+        campos.append("rolos_travados = %s"); valores.append(peca.rolos_travados)
 
     if not campos:
         raise HTTPException(status_code=400, detail="Nenhum campo para atualizar foi enviado.")
@@ -897,8 +907,8 @@ def atualizar_peca(peca: PecaUpdate):
 
         if cursor.rowcount == 0:
             cursor.execute('''
-                INSERT INTO equipamentos (id, tipo, local, status, tonelagem, dias, meta, posicao, tag_patrimonio, data_entrada, data_reparo, substituido_por, observacao)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO equipamentos (id, tipo, local, status, tonelagem, dias, meta, posicao, tag_patrimonio, data_entrada, data_reparo, substituido_por, observacao, rolos_travados)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     tipo = EXCLUDED.tipo,
                     local = EXCLUDED.local,
@@ -911,12 +921,13 @@ def atualizar_peca(peca: PecaUpdate):
                     data_entrada = EXCLUDED.data_entrada,
                     data_reparo = EXCLUDED.data_reparo,
                     substituido_por = EXCLUDED.substituido_por,
-                    observacao = EXCLUDED.observacao
+                    observacao = EXCLUDED.observacao,
+                    rolos_travados = EXCLUDED.rolos_travados
             ''', (
                 peca.id, peca.tipo or "", peca.local or "", peca.status or "",
                 peca.tonelagem or 0, peca.dias or 0, peca.meta or 0, peca.posicao or "",
                 peca.tag_patrimonio, peca.data_entrada, peca.data_reparo,
-                peca.substituido_por, peca.observacao
+                peca.substituido_por, peca.observacao, peca.rolos_travados
             ))
             criada = True
 
