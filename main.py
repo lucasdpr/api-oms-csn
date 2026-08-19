@@ -696,6 +696,14 @@ class PecaUpdate(BaseModel):
     observacao: Optional[str] = None
     rolos_travados: Optional[str] = None
     mancais_ocorrencias: Optional[str] = None
+    # 🆕 Preenchidos SÓ quando o front-end registra uma ocorrência nova
+    # (quebra de rolamento / vazamento de graxa / vazamento de água) num
+    # mancal — não em toda troca de rolos_travados/observacao. Servem só
+    # pra disparar o push notification; o texto já vem pronto do
+    # front-end (ver salvarMancalOcorrencia no Sinotico3d.html), porque
+    # é lá que se sabe qual peça, qual mancal e qual veio.
+    mancal_evento_titulo: Optional[str] = None
+    mancal_evento_corpo: Optional[str] = None
 
 class ProducaoGeral(BaseModel):
     operador: str
@@ -943,6 +951,17 @@ def atualizar_peca(peca: PecaUpdate):
             criada = True
 
         conn.commit()
+
+    # 🆕 Notificação push quando uma ocorrência de mancal é registrada
+    # (não dispara em toda edição de peça — só quando o front-end manda
+    # o texto pronto, ou seja, quando de fato marcou quebra de
+    # rolamento / vazamento de graxa ou água num mancal).
+    if peca.mancal_evento_corpo:
+        enviar_push_para_area(
+            titulo=peca.mancal_evento_titulo or "⚠️ Ocorrência em mancal",
+            corpo=peca.mancal_evento_corpo,
+            area="Ambos"
+        )
 
     return {"sucesso": True, "criada": criada}
 
