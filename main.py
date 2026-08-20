@@ -587,11 +587,39 @@ def init_db():
         # (mantida só pra não quebrar quem já tinha dado no ar antes).
         cursor.execute('''ALTER TABLE ordens_servico ADD COLUMN IF NOT EXISTS foto_base64 TEXT''')
 
+        # 🆕 Status "Não Executada" — bate com o campo "[ ] Não Executada" +
+        # "Motivo/Justificativa" que já existe no papel da OS real (parte
+        # de confirmação, no final do documento). Cobre o caso de uma OS
+        # que estava "Em Andamento" mas precisou ser encerrada sem ter
+        # sido feita (falta de peça, condição não permitiu, replanejada
+        # etc) — precisa ficar registrado o motivo, não só sumir.
+        cursor.execute('''ALTER TABLE ordens_servico ADD COLUMN IF NOT EXISTS motivo_nao_executada TEXT''')
+        cursor.execute('''ALTER TABLE ordens_servico ADD COLUMN IF NOT EXISTS encerrado_por TEXT''')
+        cursor.execute('''ALTER TABLE ordens_servico ADD COLUMN IF NOT EXISTS encerrado_em TEXT''')
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS os_fotos (
                 id SERIAL PRIMARY KEY,
                 os_id INTEGER REFERENCES ordens_servico(id) ON DELETE CASCADE,
                 foto_base64 TEXT NOT NULL,
+                criado_em TEXT
+            )
+        ''')
+
+        # 🆕 LAUDOS (PDFs de folhão finalizado) — antes ficavam SÓ no
+        # localStorage de quem gerou o laudo (window.salvarLaudoNoHistorico
+        # em script.js), então: 1) sumiam se a pessoa limpasse os dados do
+        # navegador, e 2) nunca apareciam pra outro técnico em outro
+        # aparelho, nem na Auditoria de ninguém além de quem gerou. Agora
+        # o HTML completo do laudo é salvo no Neon, igual todo o resto do
+        # sistema.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS laudos (
+                id SERIAL PRIMARY KEY,
+                peca_id TEXT NOT NULL,
+                tipo TEXT,
+                html TEXT NOT NULL,
+                criado_por TEXT,
                 criado_em TEXT
             )
         ''')
@@ -951,11 +979,23 @@ class OrdemServicoCriar(BaseModel):
 
 class OrdemServicoStatus(BaseModel):
     id: int
-    status: str  # "Em Andamento" | "Concluído"
+    status: str  # "Em Andamento" | "Concluído" | "Não Executada"
     operador: str
+    motivo: Optional[str] = None  # obrigatório quando status = "Não Executada"
 
 
 class OrdemServicoExcluir(BaseModel):
+    id: int
+
+
+class LaudoCriar(BaseModel):
+    peca_id: str
+    tipo: Optional[str] = None
+    html: str
+    operador: str
+
+
+class LaudoExcluir(BaseModel):
     id: int
 
 
@@ -2118,22 +2158,38 @@ def criar_ordem_servico(dados: OrdemServicoCriar):
 
 @app.post("/api/ordens_servico/status")
 def mudar_status_ordem_servico(dados: OrdemServicoStatus):
-    if dados.status not in ("Em Andamento", "Concluído"):
+    if dados.status not in ("Em Andamento", "Concluído", "Não Executada"):
         raise HTTPException(status_code=400, detail="Status inválido.")
+    if dados.status == "Não Executada" and not (dados.motivo and dados.motivo.strip()):
+        raise HTTPException(status_code=400, detail="Informe o motivo/justificativa pra marcar como Não Executada.")
 
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         if dados.status == "Concluído":
             cursor.execute(
-                "UPDATE ordens_servico SET status = %s, concluido_por = %s, concluido_em = %s WHERE id = %s",
+                """UPDATE ordens_servico
+                   SET status = %s, concluido_por = %s, concluido_em = %s,
+                       motivo_nao_executada = NULL, encerrado_por = NULL, encerrado_em = NULL
+                   WHERE id = %s""",
                 (dados.status, dados.operador, agora, dados.id)
             )
-        else:
-            # Voltando pra "Em Andamento" — limpa quem/quando concluiu,
-            # já que essa conclusão deixou de valer.
+        elif dados.status == "Não Executada":
             cursor.execute(
-                "UPDATE ordens_servico SET status = %s, concluido_por = NULL, concluido_em = NULL WHERE id = %s",
+                """UPDATE ordens_servico
+                   SET status = %s, motivo_nao_executada = %s, encerrado_por = %s, encerrado_em = %s,
+                       concluido_por = NULL, concluido_em = NULL
+                   WHERE id = %s""",
+                (dados.status, dados.motivo.strip(), dados.operador, agora, dados.id)
+            )
+        else:
+            # Voltando pra "Em Andamento" — limpa qualquer marcação de
+            # conclusão ou de não-execução, já que deixou de valer.
+            cursor.execute(
+                """UPDATE ordens_servico
+                   SET status = %s, concluido_por = NULL, concluido_em = NULL,
+                       motivo_nao_executada = NULL, encerrado_por = NULL, encerrado_em = NULL
+                   WHERE id = %s""",
                 (dados.status, dados.id)
             )
         if cursor.rowcount == 0:
@@ -2152,6 +2208,63 @@ def excluir_ordem_servico(dados: OrdemServicoExcluir):
         cursor.execute("DELETE FROM ordens_servico WHERE id = %s", (dados.id,))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Ordem de serviço não encontrada.")
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+# ==========================================
+# 🆕 LAUDOS (PDFs de folhão finalizado) — antes só existiam no
+# localStorage de quem gerava; agora persistem no Neon, visíveis pra
+# todo mundo na Auditoria (igual o resto do histórico).
+# ==========================================
+@app.get("/api/laudos")
+def listar_laudos(peca_id: Optional[str] = None, limite: int = 200):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if peca_id:
+            cursor.execute(
+                "SELECT * FROM laudos WHERE peca_id = %s ORDER BY id DESC LIMIT %s",
+                (peca_id, limite)
+            )
+        else:
+            cursor.execute("SELECT * FROM laudos ORDER BY id DESC LIMIT %s", (limite,))
+        return cursor.fetchall()
+
+
+@app.get("/api/laudos/{laudo_id}")
+def get_laudo(laudo_id: int):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM laudos WHERE id = %s", (laudo_id,))
+        laudo = cursor.fetchone()
+        if not laudo:
+            raise HTTPException(status_code=404, detail="Laudo não encontrado.")
+        return laudo
+
+
+@app.post("/api/laudos")
+def criar_laudo(dados: LaudoCriar):
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO laudos (peca_id, tipo, html, criado_por, criado_em) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (dados.peca_id, dados.tipo, dados.html, dados.operador, agora)
+        )
+        laudo_id = cursor.fetchone()["id"]
+        conn.commit()
+
+    return {"sucesso": True, "id": laudo_id}
+
+
+@app.post("/api/laudos/excluir")
+def excluir_laudo(dados: LaudoExcluir):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM laudos WHERE id = %s", (dados.id,))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Laudo não encontrado.")
         conn.commit()
 
     return {"sucesso": True}
