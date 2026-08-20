@@ -627,9 +627,34 @@ def init_db():
 init_db()
 
 
+import re as re_lib
+
+
+# 🔧 CORREÇÃO ("notificação chega feia no celular, cheia de coisa
+# escrita"): o texto de várias ações (Intervenção, Melhoria, Comentário,
+# Atividade Pendente, Registro Manual) é salvo no banco já com tags HTML
+# — ex: '<span style="color:#eab308;">[INTERVENÇÃO]</span>' — usadas só
+# pra colorir a categoria dentro do Prontuário do app. O problema é que
+# a notificação push mostra TEXTO PURO (o celular não entende HTML), e
+# essas tags apareciam escritas literalmente na notificação, deixando
+# ela poluída e ilegível. Esta função limpa o texto SÓ pra exibição na
+# notificação — o que fica salvo no banco/Prontuário continua intacto.
+def limpar_texto_para_notificacao(texto: str) -> str:
+    if not texto:
+        return texto
+    # Remove qualquer tag HTML (ex: <span ...>, </span>)
+    limpo = re_lib.sub(r"<[^>]+>", "", texto)
+    # Espaços duplicados que sobram depois de tirar as tags
+    limpo = re_lib.sub(r"\s{2,}", " ", limpo).strip()
+    return limpo
+
+
 def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str = "/"):
     if not PUSH_HABILITADO:
         return
+
+    corpo = limpar_texto_para_notificacao(corpo)
+    titulo = limpar_texto_para_notificacao(titulo)
 
     try:
         with get_db() as conn:
@@ -734,6 +759,17 @@ class DefinirSenhaColaborador(BaseModel):
     matricula: str
     senha_atual: str
     nova_senha: str
+
+class ColaboradorMudarCargo(BaseModel):
+    matricula: str
+    cargo: str
+
+class ColaboradorAlternarAtivo(BaseModel):
+    matricula: str
+    ativo: bool
+
+class ColaboradorResetarSenha(BaseModel):
+    matricula: str
 
 class MaterialCadastro(BaseModel):
     codigo: str
@@ -1260,6 +1296,78 @@ def definir_senha_colaborador(dados: DefinirSenhaColaborador):
     return {"sucesso": True}
 
 
+# ==========================================
+# ADMINISTRAÇÃO DE COLABORADORES (Área Restrita — só as 2 matrículas
+# admin, checagem feita no front-end igual ao resto da Área Restrita;
+# essas rotas não têm autenticação própria, seguindo o mesmo padrão do
+# resto da API neste sistema).
+# ==========================================
+@app.get("/api/colaboradores/todos")
+def get_colaboradores_todos():
+    """Lista TODOS os colaboradores, ativos e inativos — usado só no
+    painel de administração (a rota /api/colaboradores normal, usada
+    pelo login e por outras telas, continua trazendo só quem está
+    ativo)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT matricula, nome, cargo, ativo, primeiro_acesso FROM colaboradores ORDER BY ativo DESC, nome"
+        )
+        return cursor.fetchall()
+
+
+@app.post("/api/colaboradores/mudar_cargo")
+def mudar_cargo_colaborador(dados: ColaboradorMudarCargo):
+    matricula = dados.matricula.strip().upper()
+    cargo = dados.cargo.strip()
+    if not cargo:
+        raise HTTPException(status_code=400, detail="Informe um cargo.")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE colaboradores SET cargo = %s WHERE matricula = %s", (cargo, matricula))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+@app.post("/api/colaboradores/alternar_ativo")
+def alternar_ativo_colaborador(dados: ColaboradorAlternarAtivo):
+    matricula = dados.matricula.strip().upper()
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE colaboradores SET ativo = %s WHERE matricula = %s", (dados.ativo, matricula))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
+        conn.commit()
+
+    return {"sucesso": True, "ativo": dados.ativo}
+
+
+@app.post("/api/colaboradores/resetar_senha")
+def resetar_senha_colaborador(dados: ColaboradorResetarSenha):
+    """Zera a senha do colaborador e marca como 'primeiro acesso' de
+    novo — a senha temporária volta a ser a própria matrícula, igual
+    faz o resetar_colaboradores.py no terminal, mas só pra UMA pessoa
+    por vez em vez de apagar todo mundo."""
+    matricula = dados.matricula.strip().upper()
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE colaboradores SET senha_hash = NULL, primeiro_acesso = TRUE WHERE matricula = %s",
+            (matricula,)
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
+        conn.commit()
+
+    return {"sucesso": True}
+
+
 @app.get("/api/materiais")
 def get_materiais():
     with get_db() as conn:
@@ -1726,10 +1834,19 @@ def get_materiais_todas_areas():
 
 @app.get("/api/oficina/materiais/{area}")
 def get_materiais_area_oficina(area: str):
+    # 🔧 CORREÇÃO ("aparece tudo no Catálogo geral, mas nada na aba
+    # Materiais de dentro da área"): o Catálogo geral (materiais_todos)
+    # não filtra por área — só lista tudo, então sempre "funciona"
+    # mesmo se o texto salvo em materiais_area.area tiver um espaço a
+    # mais, acento diferente ou letra maiúscula/minúscula trocada em
+    # relação à "chave" que o app usa (ex: "Bender " ≠ "bender"). Essa
+    # rota, que FILTRA por área, é onde esse tipo de divergência
+    # silenciosa aparece como "lista vazia" mesmo com dado cadastrado.
+    # TRIM + LOWER dos dois lados evita que isso quebre a busca.
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, codigo, descricao FROM materiais_area WHERE area = %s ORDER BY descricao",
+            "SELECT id, codigo, descricao FROM materiais_area WHERE LOWER(TRIM(area)) = LOWER(TRIM(%s)) ORDER BY descricao",
             (area,)
         )
         return cursor.fetchall()
@@ -1747,7 +1864,7 @@ def criar_material_area_oficina(dados: OficinaMaterial):
             ON CONFLICT (area, codigo) DO UPDATE SET descricao = EXCLUDED.descricao
             RETURNING id
             """,
-            (dados.area, dados.codigo.strip(), dados.descricao.strip(), dados.operador, agora)
+            (dados.area.strip(), dados.codigo.strip(), dados.descricao.strip(), dados.operador, agora)
         )
         material_id = cursor.fetchone()["id"]
         conn.commit()
