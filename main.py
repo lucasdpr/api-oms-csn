@@ -1823,22 +1823,27 @@ def registrar_execucao_procedimento(dados: ProcedimentoExecucao):
             )
         )
         execucao_id = cursor.fetchone()["id"]
-        conn.commit()
 
-    # Só registra no histórico do log geral (Auditoria) quando o técnico
-    # de fato concluiu todas as etapas — execuções parciais (ex: ele só
-    # queria salvar o progresso e continuar depois) não geram um evento
-    # de "procedimento concluído" na Auditoria.
-    if dados.concluido:
-        try:
-            cursor.execute(
-                "INSERT INTO log_eventos (data_hora, operador, peca_id, acao) VALUES (%s, %s, %s, %s)",
-                (agora, dados.operador or "Sistema", f"OFICINA-{dados.area.upper()}",
-                 f"📋 Procedimento concluído: {dados.procedimento_nome or dados.procedimento_id}")
-            )
-            conn.commit()
-        except Exception as e:
-            print(f"⚠️ Não consegui registrar o log de conclusão do procedimento: {e}")
+        # Só registra no histórico do log geral (Auditoria) quando o
+        # técnico de fato concluiu todas as etapas — execuções parciais
+        # (ex: ele só queria salvar o progresso e continuar depois) não
+        # geram um evento de "procedimento concluído" na Auditoria.
+        # Importante: isso precisa acontecer DENTRO do mesmo 'with',
+        # usando a mesma conexão/cursor — se rodar depois que a conexão
+        # já foi devolvida ao pool, ela pode ser reaproveitada por outra
+        # requisição ao mesmo tempo (ThreadedConnectionPool), causando
+        # erros aleatórios ou gravação na conexão errada.
+        if dados.concluido:
+            try:
+                cursor.execute(
+                    "INSERT INTO log_eventos (data_hora, operador, peca_id, acao) VALUES (%s, %s, %s, %s)",
+                    (agora, dados.operador or "Sistema", f"OFICINA-{dados.area.upper()}",
+                     f"📋 Procedimento concluído: {dados.procedimento_nome or dados.procedimento_id}")
+                )
+            except Exception as e:
+                print(f"⚠️ Não consegui registrar o log de conclusão do procedimento: {e}")
+
+        conn.commit()
 
     return {"sucesso": True, "id": execucao_id}
 
