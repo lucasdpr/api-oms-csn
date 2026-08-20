@@ -16,7 +16,30 @@ import json as json_lib
 
 load_dotenv()
 
-app = FastAPI(title="API - Oficina de Moldes CSN")
+tags_metadata = [
+    {"name": "Sistema", "description": "Verificações de saúde do servidor e do banco de dados."},
+    {"name": "Peças", "description": "Cadastro, edição, exclusão e histórico de fotos das peças/equipamentos."},
+    {"name": "Produção", "description": "Apontamento de produção geral e de moldes, com histórico e opção de desfazer."},
+    {"name": "Auditoria", "description": "Registro de eventos e consulta do histórico completo de ações do sistema."},
+    {"name": "Colaboradores", "description": "Login, cadastro, cargo e controle de acesso dos colaboradores."},
+    {"name": "Materiais (Estoque Geral)", "description": "Estoque geral de materiais (cadastro, ajuste de quantidade, remoção)."},
+    {"name": "Rolos", "description": "Estoque de rolos."},
+    {"name": "Hidráulica", "description": "Estoque hidráulico."},
+    {"name": "Folhões", "description": "Rascunho de progresso dos folhões de manutenção (salvar, carregar, finalizar)."},
+    {"name": "Notificações Push", "description": "Inscrição e envio de notificações push (Web Push / VAPID)."},
+    {"name": "Registros e Ocorrências", "description": "Intervenções, melhorias, comentários e ocorrências registradas com foto."},
+    {"name": "Oficina", "description": "Atividades, materiais por área, equipe, notas e procedimentos de cada área da Oficina."},
+    {"name": "Ordens de Serviço (OS)", "description": "Registro digital de OS em papel (foto por página) com status Em Andamento / Concluído / Não Executada."},
+    {"name": "Laudos", "description": "Laudos (PDFs) gerados ao finalizar um folhão."},
+]
+
+app = FastAPI(
+    title="API - Oficina de Moldes CSN",
+    description="Backend do sistema OMS (Oficina de Moldes e Segmentos) da CSN — gerencia peças, produção, "
+                 "oficina, colaboradores e ordens de serviço, com persistência no PostgreSQL (Neon).",
+    version="1.0.0",
+    openapi_tags=tags_metadata,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -999,7 +1022,7 @@ class LaudoExcluir(BaseModel):
     id: int
 
 
-@app.get("/api/pecas")
+@app.get("/api/pecas", tags=["Peças"], summary="Listar todas as peças")
 def get_pecas():
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1007,7 +1030,7 @@ def get_pecas():
         return cursor.fetchall()
 
 
-@app.post("/api/atualizar_peca")
+@app.post("/api/atualizar_peca", tags=["Peças"], summary="Cadastrar ou atualizar uma peça")
 def atualizar_peca(peca: PecaUpdate):
     campos = []
     valores = []
@@ -1095,7 +1118,7 @@ def atualizar_peca(peca: PecaUpdate):
     return {"sucesso": True, "criada": criada}
 
 
-@app.post("/api/excluir_peca")
+@app.post("/api/excluir_peca", tags=["Peças"], summary="Excluir uma peça")
 def excluir_peca(peca: PecaExcluir):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1109,7 +1132,7 @@ def excluir_peca(peca: PecaExcluir):
     return {"sucesso": True}
 
 
-@app.post("/api/apontar_producao_geral")
+@app.post("/api/apontar_producao_geral", tags=["Produção"], summary="Apontar produção (geral)")
 def apontar_producao_geral(dados: ProducaoGeral):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1143,7 +1166,7 @@ def apontar_producao_geral(dados: ProducaoGeral):
     return {"sucesso": True}
 
 
-@app.post("/api/apontar_moldes")
+@app.post("/api/apontar_moldes", tags=["Produção"], summary="Apontar produção de moldes")
 def apontar_moldes(dados: ApontamentoMoldes):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1177,7 +1200,7 @@ def apontar_moldes(dados: ApontamentoMoldes):
     return {"sucesso": True}
 
 
-@app.get("/api/historico_apontamentos_geral")
+@app.get("/api/historico_apontamentos_geral", tags=["Produção"], summary="Histórico de apontamentos (geral)")
 def get_historico_geral():
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1185,7 +1208,7 @@ def get_historico_geral():
         return cursor.fetchall()
 
 
-@app.get("/api/historico_apontamentos_moldes")
+@app.get("/api/historico_apontamentos_moldes", tags=["Produção"], summary="Histórico de apontamentos de moldes")
 def get_historico_moldes():
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1193,7 +1216,7 @@ def get_historico_moldes():
         return cursor.fetchall()
 
 
-@app.post("/api/desfazer_apontamento_geral")
+@app.post("/api/desfazer_apontamento_geral", tags=["Produção"], summary="Desfazer apontamento (geral)")
 def desfazer_apontamento_geral(dados: DesfazerApontamento):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1225,7 +1248,7 @@ def desfazer_apontamento_geral(dados: DesfazerApontamento):
     return {"sucesso": True}
 
 
-@app.post("/api/desfazer_apontamento_moldes")
+@app.post("/api/desfazer_apontamento_moldes", tags=["Produção"], summary="Desfazer apontamento de moldes")
 def desfazer_apontamento_moldes(dados: DesfazerApontamento):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1257,12 +1280,12 @@ def desfazer_apontamento_moldes(dados: DesfazerApontamento):
     return {"sucesso": True}
 
 
-@app.get("/")
+@app.get("/", tags=["Sistema"], summary="Verificar se o servidor está no ar")
 def root():
     return {"message": "API - Oficina de Moldes CSN Online!"}
 
 
-@app.get("/api/ping_db")
+@app.get("/api/ping_db", tags=["Sistema"], summary="Verificar conexão com o banco de dados")
 def ping_db():
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1271,7 +1294,7 @@ def ping_db():
     return {"status": "ok", "banco": "acordado"}
 
 
-@app.post("/api/registrar_evento")
+@app.post("/api/registrar_evento", tags=["Auditoria"], summary="Registrar um evento na Auditoria")
 def registrar_evento(evento: EventoLog):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
@@ -1294,7 +1317,7 @@ def registrar_evento(evento: EventoLog):
     return {"sucesso": True}
 
 
-@app.get("/api/historico_eventos")
+@app.get("/api/historico_eventos", tags=["Auditoria"], summary="Consultar o histórico completo de eventos")
 def get_historico_eventos(peca_id: Optional[str] = None, limite: int = 200):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1308,7 +1331,7 @@ def get_historico_eventos(peca_id: Optional[str] = None, limite: int = 200):
         return cursor.fetchall()
 
 
-@app.get("/api/colaboradores")
+@app.get("/api/colaboradores", tags=["Colaboradores"], summary="Listar colaboradores ativos")
 def get_colaboradores():
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1318,7 +1341,7 @@ def get_colaboradores():
         return cursor.fetchall()
 
 
-@app.post("/api/colaboradores/login")
+@app.post("/api/colaboradores/login", tags=["Colaboradores"], summary="Autenticar colaborador (login)")
 def login_colaborador(dados: LoginColaborador):
     matricula = dados.matricula.strip().upper()
 
@@ -1354,7 +1377,7 @@ def login_colaborador(dados: LoginColaborador):
     }
 
 
-@app.post("/api/colaboradores/definir_senha")
+@app.post("/api/colaboradores/definir_senha", tags=["Colaboradores"], summary="Definir senha no primeiro acesso")
 def definir_senha_colaborador(dados: DefinirSenhaColaborador):
     matricula = dados.matricula.strip().upper()
 
@@ -1395,7 +1418,7 @@ def definir_senha_colaborador(dados: DefinirSenhaColaborador):
 # essas rotas não têm autenticação própria, seguindo o mesmo padrão do
 # resto da API neste sistema).
 # ==========================================
-@app.get("/api/colaboradores/todos")
+@app.get("/api/colaboradores/todos", tags=["Colaboradores"], summary="Listar todos os colaboradores (ativos e inativos)")
 def get_colaboradores_todos():
     """Lista TODOS os colaboradores, ativos e inativos — usado só no
     painel de administração (a rota /api/colaboradores normal, usada
@@ -1409,7 +1432,7 @@ def get_colaboradores_todos():
         return cursor.fetchall()
 
 
-@app.post("/api/colaboradores/mudar_cargo")
+@app.post("/api/colaboradores/mudar_cargo", tags=["Colaboradores"], summary="Trocar o cargo de um colaborador")
 def mudar_cargo_colaborador(dados: ColaboradorMudarCargo):
     matricula = dados.matricula.strip().upper()
     cargo = dados.cargo.strip()
@@ -1426,7 +1449,7 @@ def mudar_cargo_colaborador(dados: ColaboradorMudarCargo):
     return {"sucesso": True}
 
 
-@app.post("/api/colaboradores/alternar_ativo")
+@app.post("/api/colaboradores/alternar_ativo", tags=["Colaboradores"], summary="Ativar ou desativar acesso de um colaborador")
 def alternar_ativo_colaborador(dados: ColaboradorAlternarAtivo):
     matricula = dados.matricula.strip().upper()
 
@@ -1440,7 +1463,7 @@ def alternar_ativo_colaborador(dados: ColaboradorAlternarAtivo):
     return {"sucesso": True, "ativo": dados.ativo}
 
 
-@app.post("/api/colaboradores/resetar_senha")
+@app.post("/api/colaboradores/resetar_senha", tags=["Colaboradores"], summary="Resetar senha de um colaborador")
 def resetar_senha_colaborador(dados: ColaboradorResetarSenha):
     """Zera a senha do colaborador e marca como 'primeiro acesso' de
     novo — a senha temporária volta a ser a própria matrícula, igual
@@ -1461,7 +1484,7 @@ def resetar_senha_colaborador(dados: ColaboradorResetarSenha):
     return {"sucesso": True}
 
 
-@app.get("/api/materiais")
+@app.get("/api/materiais", tags=["Materiais (Estoque Geral)"], summary="Listar materiais do estoque geral")
 def get_materiais():
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1471,7 +1494,7 @@ def get_materiais():
         return cursor.fetchall()
 
 
-@app.post("/api/materiais/cadastrar")
+@app.post("/api/materiais/cadastrar", tags=["Materiais (Estoque Geral)"], summary="Cadastrar novo material")
 def cadastrar_material(dados: MaterialCadastro):
     codigo = dados.codigo.strip().upper()
     descricao = dados.descricao.strip().upper()
@@ -1502,7 +1525,7 @@ def cadastrar_material(dados: MaterialCadastro):
     return {"sucesso": True, "ja_existia": ja_existia, "material": atualizado}
 
 
-@app.post("/api/materiais/ajustar")
+@app.post("/api/materiais/ajustar", tags=["Materiais (Estoque Geral)"], summary="Ajustar quantidade de um material")
 def ajustar_material(dados: MaterialAjuste):
     codigo = dados.codigo.strip().upper()
 
@@ -1528,7 +1551,7 @@ def ajustar_material(dados: MaterialAjuste):
     return {"sucesso": True, "material": atualizado}
 
 
-@app.post("/api/materiais/remover")
+@app.post("/api/materiais/remover", tags=["Materiais (Estoque Geral)"], summary="Remover um material do estoque")
 def remover_material(dados: MaterialRemover):
     codigo = dados.codigo.strip().upper()
 
@@ -1543,7 +1566,7 @@ def remover_material(dados: MaterialRemover):
     return {"sucesso": True}
 
 
-@app.get("/api/rolos")
+@app.get("/api/rolos", tags=["Rolos"], summary="Listar estoque de rolos")
 def get_rolos():
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1551,7 +1574,7 @@ def get_rolos():
         return cursor.fetchall()
 
 
-@app.post("/api/rolos/ajustar")
+@app.post("/api/rolos/ajustar", tags=["Rolos"], summary="Ajustar estoque de rolos")
 def ajustar_rolo(dados: RoloAjuste):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1572,7 +1595,7 @@ def ajustar_rolo(dados: RoloAjuste):
     return {"sucesso": True, "rolo": atualizado}
 
 
-@app.get("/api/hidraulica")
+@app.get("/api/hidraulica", tags=["Hidráulica"], summary="Listar estoque hidráulico")
 def get_hidraulica():
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1580,7 +1603,7 @@ def get_hidraulica():
         return cursor.fetchall()
 
 
-@app.post("/api/hidraulica/ajustar")
+@app.post("/api/hidraulica/ajustar", tags=["Hidráulica"], summary="Ajustar estoque hidráulico")
 def ajustar_hidraulica(dados: HidraulicaAjuste):
     if dados.local not in ("aplicado", "reserva"):
         raise HTTPException(status_code=400, detail="local precisa ser 'aplicado' ou 'reserva'.")
@@ -1606,7 +1629,7 @@ def ajustar_hidraulica(dados: HidraulicaAjuste):
     return {"sucesso": True, "item": atualizado}
 
 
-@app.get("/api/folhao/{equipamento_id}")
+@app.get("/api/folhao/{equipamento_id}", tags=["Folhões"], summary="Carregar rascunho salvo de um folhão")
 def get_rascunho_folhao(equipamento_id: str):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1622,7 +1645,7 @@ def get_rascunho_folhao(equipamento_id: str):
     return rascunho
 
 
-@app.post("/api/folhao/salvar")
+@app.post("/api/folhao/salvar", tags=["Folhões"], summary="Salvar progresso de um folhão")
 def salvar_rascunho_folhao(dados: FolhaoRascunhoSalvar):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1645,7 +1668,7 @@ def salvar_rascunho_folhao(dados: FolhaoRascunhoSalvar):
     return {"sucesso": True}
 
 
-@app.post("/api/folhao/finalizar")
+@app.post("/api/folhao/finalizar", tags=["Folhões"], summary="Finalizar (limpar rascunho de) um folhão")
 def finalizar_rascunho_folhao(dados: FolhaoRascunhoFinalizar):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1658,14 +1681,14 @@ def finalizar_rascunho_folhao(dados: FolhaoRascunhoFinalizar):
     return {"sucesso": True}
 
 
-@app.get("/api/push/vapid_public_key")
+@app.get("/api/push/vapid_public_key", tags=["Notificações Push"], summary="Obter a chave pública VAPID")
 def get_vapid_public_key():
     if not PUSH_HABILITADO:
         raise HTTPException(status_code=503, detail="Push notification não configurado no servidor.")
     return {"publicKey": VAPID_PUBLIC_KEY}
 
 
-@app.post("/api/push/subscribe")
+@app.post("/api/push/subscribe", tags=["Notificações Push"], summary="Inscrever dispositivo pra notificações push")
 def subscribe_push(dados: PushSubscribe):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
@@ -1685,7 +1708,7 @@ def subscribe_push(dados: PushSubscribe):
     return {"sucesso": True}
 
 
-@app.post("/api/push/unsubscribe")
+@app.post("/api/push/unsubscribe", tags=["Notificações Push"], summary="Cancelar inscrição de notificações push")
 def unsubscribe_push(dados: PushUnsubscribe):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1697,7 +1720,7 @@ def unsubscribe_push(dados: PushUnsubscribe):
 # ==========================================
 # 📸 REGISTRO COM FOTO E CATEGORIA
 # ==========================================
-@app.post("/api/registro_com_foto")
+@app.post("/api/registro_com_foto", tags=["Registros e Ocorrências"], summary="Registrar Intervenção/Melhoria/Comentário/Ocorrência com foto")
 def registrar_com_foto(dados: RegistroComFoto):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1731,7 +1754,7 @@ def registrar_com_foto(dados: RegistroComFoto):
     return {"sucesso": True, "evento_id": evento_id}
 
 
-@app.get("/api/fotos/{peca_id}")
+@app.get("/api/fotos/{peca_id}", tags=["Peças"], summary="Listar fotos registradas de uma peça")
 def get_fotos_da_peca(peca_id: str):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1745,7 +1768,7 @@ def get_fotos_da_peca(peca_id: str):
         return cursor.fetchall()
 
 
-@app.get("/api/registros_ocorrencia")
+@app.get("/api/registros_ocorrencia", tags=["Registros e Ocorrências"], summary="Listar ocorrências registradas")
 def get_registros_ocorrencia(categoria: Optional[str] = None, limite: int = 100):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1775,7 +1798,7 @@ def get_registros_ocorrencia(categoria: Optional[str] = None, limite: int = 100)
 # ==========================================
 # OFICINA — ATIVIDADES POR ÁREA (v1)
 # ==========================================
-@app.get("/api/oficina/atividades")
+@app.get("/api/oficina/atividades", tags=["Oficina"], summary="Listar atividades da Oficina")
 def listar_atividades_oficina(area: Optional[str] = None, status: Optional[str] = None):
     """
     Lista as atividades da oficina. Sem filtro, traz TUDO — a grade de
@@ -1798,7 +1821,7 @@ def listar_atividades_oficina(area: Optional[str] = None, status: Optional[str] 
         return cursor.fetchall()
 
 
-@app.post("/api/oficina/atividade")
+@app.post("/api/oficina/atividade", tags=["Oficina"], summary="Criar atividade da Oficina")
 def criar_atividade_oficina(dados: OficinaAtividade):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
@@ -1834,7 +1857,7 @@ def criar_atividade_oficina(dados: OficinaAtividade):
 
 
 
-@app.post("/api/oficina/atividade/status")
+@app.post("/api/oficina/atividade/status", tags=["Oficina"], summary="Mudar status de uma atividade da Oficina")
 def mudar_status_atividade_oficina(dados: OficinaStatus):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     concluido_em = agora if dados.status == "Concluído" else None
@@ -1850,7 +1873,7 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
     return {"sucesso": True}
 
 
-@app.post("/api/oficina/atividade/excluir")
+@app.post("/api/oficina/atividade/excluir", tags=["Oficina"], summary="Excluir atividade da Oficina")
 def excluir_atividade_oficina(dados: OficinaExcluir):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1861,7 +1884,7 @@ def excluir_atividade_oficina(dados: OficinaExcluir):
     return {"sucesso": True}
 
 
-@app.get("/api/oficina/nota/{area}")
+@app.get("/api/oficina/nota/{area}", tags=["Oficina"], summary="Consultar anotações de uma área")
 def get_nota_area_oficina(area: str):
     """404 = área ainda sem anotações — é normal, o front trata como
     campo vazio."""
@@ -1874,7 +1897,7 @@ def get_nota_area_oficina(area: str):
         return nota
 
 
-@app.post("/api/oficina/nota")
+@app.post("/api/oficina/nota", tags=["Oficina"], summary="Salvar anotações de uma área")
 def salvar_nota_area_oficina(dados: OficinaNota):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
@@ -1894,7 +1917,7 @@ def salvar_nota_area_oficina(dados: OficinaNota):
     return {"sucesso": True}
 
 
-@app.get("/api/oficina/equipe/{area}")
+@app.get("/api/oficina/equipe/{area}", tags=["Oficina"], summary="Listar equipe de uma área")
 def get_equipe_area_oficina(area: str):
     """Lista os colaboradores (mecânicos, eletricistas etc.) cadastrados
     naquela área da oficina — vem da planilha do efetivo, importada via
@@ -1912,7 +1935,7 @@ def get_equipe_area_oficina(area: str):
 # ==========================================
 # OFICINA — MATERIAIS POR ÁREA
 # ==========================================
-@app.get("/api/oficina/materiais_todos")
+@app.get("/api/oficina/materiais_todos", tags=["Oficina"], summary="Catálogo geral de materiais (todas as áreas)")
 def get_materiais_todas_areas():
     """Lista os materiais técnicos de TODAS as áreas de uma vez, cada um
     já com a área a que pertence — usado no Catálogo geral (busca única
@@ -1925,7 +1948,7 @@ def get_materiais_todas_areas():
         return cursor.fetchall()
 
 
-@app.get("/api/oficina/materiais/{area}")
+@app.get("/api/oficina/materiais/{area}", tags=["Oficina"], summary="Listar materiais de uma área específica")
 def get_materiais_area_oficina(area: str):
     # 🔧 CORREÇÃO ("aparece tudo no Catálogo geral, mas nada na aba
     # Materiais de dentro da área"): o Catálogo geral (materiais_todos)
@@ -1945,7 +1968,7 @@ def get_materiais_area_oficina(area: str):
         return cursor.fetchall()
 
 
-@app.post("/api/oficina/materiais")
+@app.post("/api/oficina/materiais", tags=["Oficina"], summary="Cadastrar material numa área")
 def criar_material_area_oficina(dados: OficinaMaterial):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
@@ -1964,7 +1987,7 @@ def criar_material_area_oficina(dados: OficinaMaterial):
     return {"sucesso": True, "id": material_id}
 
 
-@app.post("/api/oficina/materiais/excluir")
+@app.post("/api/oficina/materiais/excluir", tags=["Oficina"], summary="Excluir material de uma área")
 def excluir_material_area_oficina(dados: OficinaMaterialExcluir):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1978,7 +2001,7 @@ def excluir_material_area_oficina(dados: OficinaMaterialExcluir):
 # ==========================================
 # OFICINA — EDITAR ATIVIDADE
 # ==========================================
-@app.post("/api/oficina/atividade/editar")
+@app.post("/api/oficina/atividade/editar", tags=["Oficina"], summary="Editar atividade da Oficina")
 def editar_atividade_oficina(dados: OficinaAtividadeEditar):
     """Edita os campos de uma atividade já lançada. Área, status e
     autoria original não mudam aqui — só descrição/equipamento/
@@ -2009,7 +2032,7 @@ def editar_atividade_oficina(dados: OficinaAtividadeEditar):
 # fica o REGISTRO de cada execução: quem fez, quando, e quais etapas
 # foram marcadas. Isso permite auditar depois (ex: "esse procedimento
 # foi mesmo seguido por completo na última execução?").
-@app.post("/api/oficina/procedimento/executar")
+@app.post("/api/oficina/procedimento/executar", tags=["Oficina"], summary="Registrar execução de um procedimento")
 def registrar_execucao_procedimento(dados: ProcedimentoExecucao):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
@@ -2058,7 +2081,7 @@ def registrar_execucao_procedimento(dados: ProcedimentoExecucao):
     return {"sucesso": True, "id": execucao_id}
 
 
-@app.get("/api/oficina/procedimento/historico/{area}")
+@app.get("/api/oficina/procedimento/historico/{area}", tags=["Oficina"], summary="Histórico de procedimentos executados numa área")
 def historico_execucoes_procedimento(area: str, procedimento_id: Optional[str] = None, limite: int = 20):
     """Últimas execuções de procedimentos de uma área — usado pra mostrar
     'última vez que isso foi feito, e por quem' na tela do procedimento."""
@@ -2093,7 +2116,7 @@ def historico_execucoes_procedimento(area: str, procedimento_id: Optional[str] =
 # fotos por OS, uma por página), com acompanhamento de status (Em
 # Andamento / Concluído).
 # ==========================================
-@app.get("/api/ordens_servico")
+@app.get("/api/ordens_servico", tags=["Ordens de Serviço (OS)"], summary="Listar Ordens de Serviço")
 def listar_ordens_servico(status: Optional[str] = None):
     """Lista as OS com uma foto de "capa" (a primeira cadastrada) e o
     total de fotos — pra montar o card na lista sem precisar buscar
@@ -2116,7 +2139,7 @@ def listar_ordens_servico(status: Optional[str] = None):
         return cursor.fetchall()
 
 
-@app.get("/api/ordens_servico/{os_id}/fotos")
+@app.get("/api/ordens_servico/{os_id}/fotos", tags=["Ordens de Serviço (OS)"], summary="Listar páginas (fotos) de uma OS")
 def get_fotos_ordem_servico(os_id: int):
     """Todas as fotos/páginas de uma OS específica, na ordem em que
     foram cadastradas — usado pra abrir a galeria completa da OS."""
@@ -2129,7 +2152,7 @@ def get_fotos_ordem_servico(os_id: int):
         return cursor.fetchall()
 
 
-@app.post("/api/ordens_servico")
+@app.post("/api/ordens_servico", tags=["Ordens de Serviço (OS)"], summary="Registrar nova Ordem de Serviço")
 def criar_ordem_servico(dados: OrdemServicoCriar):
     if not dados.fotos_base64:
         raise HTTPException(status_code=400, detail="É preciso pelo menos 1 foto da OS.")
@@ -2156,7 +2179,7 @@ def criar_ordem_servico(dados: OrdemServicoCriar):
     return {"sucesso": True, "id": os_id}
 
 
-@app.post("/api/ordens_servico/status")
+@app.post("/api/ordens_servico/status", tags=["Ordens de Serviço (OS)"], summary="Mudar status de uma Ordem de Serviço")
 def mudar_status_ordem_servico(dados: OrdemServicoStatus):
     if dados.status not in ("Em Andamento", "Concluído", "Não Executada"):
         raise HTTPException(status_code=400, detail="Status inválido.")
@@ -2199,7 +2222,7 @@ def mudar_status_ordem_servico(dados: OrdemServicoStatus):
     return {"sucesso": True}
 
 
-@app.post("/api/ordens_servico/excluir")
+@app.post("/api/ordens_servico/excluir", tags=["Ordens de Serviço (OS)"], summary="Excluir uma Ordem de Serviço")
 def excluir_ordem_servico(dados: OrdemServicoExcluir):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -2218,7 +2241,7 @@ def excluir_ordem_servico(dados: OrdemServicoExcluir):
 # localStorage de quem gerava; agora persistem no Neon, visíveis pra
 # todo mundo na Auditoria (igual o resto do histórico).
 # ==========================================
-@app.get("/api/laudos")
+@app.get("/api/laudos", tags=["Laudos"], summary="Listar laudos gerados")
 def listar_laudos(peca_id: Optional[str] = None, limite: int = 200):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -2232,7 +2255,7 @@ def listar_laudos(peca_id: Optional[str] = None, limite: int = 200):
         return cursor.fetchall()
 
 
-@app.get("/api/laudos/{laudo_id}")
+@app.get("/api/laudos/{laudo_id}", tags=["Laudos"], summary="Consultar um laudo específico")
 def get_laudo(laudo_id: int):
     with get_db() as conn:
         cursor = conn.cursor()
@@ -2243,7 +2266,7 @@ def get_laudo(laudo_id: int):
         return laudo
 
 
-@app.post("/api/laudos")
+@app.post("/api/laudos", tags=["Laudos"], summary="Salvar um laudo gerado")
 def criar_laudo(dados: LaudoCriar):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
@@ -2258,7 +2281,7 @@ def criar_laudo(dados: LaudoCriar):
     return {"sucesso": True, "id": laudo_id}
 
 
-@app.post("/api/laudos/excluir")
+@app.post("/api/laudos/excluir", tags=["Laudos"], summary="Excluir um laudo")
 def excluir_laudo(dados: LaudoExcluir):
     with get_db() as conn:
         cursor = conn.cursor()
