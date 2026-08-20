@@ -561,21 +561,38 @@ def init_db():
         ''')
 
         # 🆕 ORDENS DE SERVIÇO (OS) — registro digital das OS em papel.
-        # A pessoa tira foto do papel (foto_base64), opcionalmente anota o
-        # número da OS e uma descrição, e acompanha o status (Em Andamento
-        # -> Concluído). Fica na aba "Registro de OS", dentro de
-        # Monitoramento de Máquinas.
+        # A OS real da CSN vem em várias páginas (cabeçalho, EPIs/
+        # ferramentas/operações, confirmação) — por isso as fotos ficam
+        # numa tabela separada (os_fotos, 1 OS pode ter N fotos, uma por
+        # página), em vez de uma coluna só de foto na própria ordens_servico.
+        # A pessoa opcionalmente anota o número da OS e uma descrição, e
+        # acompanha o status (Em Andamento -> Concluído). Fica na aba
+        # "Registro de OS", dentro de Monitoramento de Máquinas.
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS ordens_servico (
                 id SERIAL PRIMARY KEY,
                 numero_os TEXT,
                 descricao TEXT,
-                foto_base64 TEXT,
                 status TEXT DEFAULT 'Em Andamento',
                 criado_por TEXT,
                 criado_em TEXT,
                 concluido_por TEXT,
                 concluido_em TEXT
+            )
+        ''')
+        # Coluna antiga de uma versão anterior (1 OS = 1 foto só) — quem
+        # já tinha essa tabela criada com CREATE TABLE IF NOT EXISTS não
+        # ganha a mudança de estrutura sozinho, mas como as fotos agora
+        # vivem em os_fotos, essa coluna simplesmente deixa de ser usada
+        # (mantida só pra não quebrar quem já tinha dado no ar antes).
+        cursor.execute('''ALTER TABLE ordens_servico ADD COLUMN IF NOT EXISTS foto_base64 TEXT''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS os_fotos (
+                id SERIAL PRIMARY KEY,
+                os_id INTEGER REFERENCES ordens_servico(id) ON DELETE CASCADE,
+                foto_base64 TEXT NOT NULL,
+                criado_em TEXT
             )
         ''')
 
@@ -928,7 +945,7 @@ class OficinaAtividadeEditar(BaseModel):
 class OrdemServicoCriar(BaseModel):
     numero_os: Optional[str] = None
     descricao: Optional[str] = None
-    foto_base64: Optional[str] = None
+    fotos_base64: list[str] = []  # 1 OS pode ter várias páginas/fotos
     operador: str
 
 
@@ -2032,37 +2049,68 @@ def historico_execucoes_procedimento(area: str, procedimento_id: Optional[str] =
         return cursor.fetchall()
 
 # ==========================================
-# 🆕 ORDENS DE SERVIÇO (OS) — registro digital de OS em papel, com
-# foto e acompanhamento de status (Em Andamento / Concluído).
+# 🆕 ORDENS DE SERVIÇO (OS) — registro digital de OS em papel (várias
+# fotos por OS, uma por página), com acompanhamento de status (Em
+# Andamento / Concluído).
 # ==========================================
 @app.get("/api/ordens_servico")
 def listar_ordens_servico(status: Optional[str] = None):
+    """Lista as OS com uma foto de "capa" (a primeira cadastrada) e o
+    total de fotos — pra montar o card na lista sem precisar buscar
+    TODAS as fotos de TODAS as OS de uma vez (isso ficaria pesado)."""
     with get_db() as conn:
         cursor = conn.cursor()
+        query = """
+            SELECT
+                o.*,
+                (SELECT f.foto_base64 FROM os_fotos f WHERE f.os_id = o.id ORDER BY f.id ASC LIMIT 1) AS foto_capa,
+                (SELECT COUNT(*) FROM os_fotos f WHERE f.os_id = o.id) AS total_fotos
+            FROM ordens_servico o
+        """
         if status:
-            cursor.execute(
-                "SELECT * FROM ordens_servico WHERE status = %s ORDER BY id DESC",
-                (status,)
-            )
+            query += " WHERE o.status = %s ORDER BY o.id DESC"
+            cursor.execute(query, (status,))
         else:
-            cursor.execute("SELECT * FROM ordens_servico ORDER BY id DESC")
+            query += " ORDER BY o.id DESC"
+            cursor.execute(query)
+        return cursor.fetchall()
+
+
+@app.get("/api/ordens_servico/{os_id}/fotos")
+def get_fotos_ordem_servico(os_id: int):
+    """Todas as fotos/páginas de uma OS específica, na ordem em que
+    foram cadastradas — usado pra abrir a galeria completa da OS."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, foto_base64, criado_em FROM os_fotos WHERE os_id = %s ORDER BY id ASC",
+            (os_id,)
+        )
         return cursor.fetchall()
 
 
 @app.post("/api/ordens_servico")
 def criar_ordem_servico(dados: OrdemServicoCriar):
+    if not dados.fotos_base64:
+        raise HTTPException(status_code=400, detail="É preciso pelo menos 1 foto da OS.")
+
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO ordens_servico (numero_os, descricao, foto_base64, status, criado_por, criado_em)
-            VALUES (%s, %s, %s, 'Em Andamento', %s, %s)
+            INSERT INTO ordens_servico (numero_os, descricao, status, criado_por, criado_em)
+            VALUES (%s, %s, 'Em Andamento', %s, %s)
             RETURNING id
             """,
-            (dados.numero_os, dados.descricao, dados.foto_base64, dados.operador, agora)
+            (dados.numero_os, dados.descricao, dados.operador, agora)
         )
         os_id = cursor.fetchone()["id"]
+
+        cursor.executemany(
+            "INSERT INTO os_fotos (os_id, foto_base64, criado_em) VALUES (%s, %s, %s)",
+            [(os_id, foto, agora) for foto in dados.fotos_base64]
+        )
         conn.commit()
 
     return {"sucesso": True, "id": os_id}
@@ -2099,6 +2147,8 @@ def mudar_status_ordem_servico(dados: OrdemServicoStatus):
 def excluir_ordem_servico(dados: OrdemServicoExcluir):
     with get_db() as conn:
         cursor = conn.cursor()
+        # os_fotos tem ON DELETE CASCADE — apagar a OS já apaga as fotos
+        # dela junto, sem precisar de um DELETE separado.
         cursor.execute("DELETE FROM ordens_servico WHERE id = %s", (dados.id,))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Ordem de serviço não encontrada.")
