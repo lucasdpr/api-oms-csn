@@ -560,6 +560,25 @@ def init_db():
             )
         ''')
 
+        # 🆕 ORDENS DE SERVIÇO (OS) — registro digital das OS em papel.
+        # A pessoa tira foto do papel (foto_base64), opcionalmente anota o
+        # número da OS e uma descrição, e acompanha o status (Em Andamento
+        # -> Concluído). Fica na aba "Registro de OS", dentro de
+        # Monitoramento de Máquinas.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ordens_servico (
+                id SERIAL PRIMARY KEY,
+                numero_os TEXT,
+                descricao TEXT,
+                foto_base64 TEXT,
+                status TEXT DEFAULT 'Em Andamento',
+                criado_por TEXT,
+                criado_em TEXT,
+                concluido_por TEXT,
+                concluido_em TEXT
+            )
+        ''')
+
         # 🌱 Seed único da área "segmento-grupo": já existia uma lista real
         # de materiais (Grupos 1+2+3, do documento oficial da CSN) usada
         # no folhão de Segmento Grupo — reaproveitamos aqui como ponto de
@@ -904,6 +923,23 @@ class OficinaAtividadeEditar(BaseModel):
     prioridade: Optional[str] = "Normal"
     prazo: Optional[str] = None
     foto_base64: Optional[str] = None  # null = sem foto anexada / mantém a que já tinha, ver rota
+
+
+class OrdemServicoCriar(BaseModel):
+    numero_os: Optional[str] = None
+    descricao: Optional[str] = None
+    foto_base64: Optional[str] = None
+    operador: str
+
+
+class OrdemServicoStatus(BaseModel):
+    id: int
+    status: str  # "Em Andamento" | "Concluído"
+    operador: str
+
+
+class OrdemServicoExcluir(BaseModel):
+    id: int
 
 
 @app.get("/api/pecas")
@@ -1994,3 +2030,78 @@ def historico_execucoes_procedimento(area: str, procedimento_id: Optional[str] =
                 (area, limite)
             )
         return cursor.fetchall()
+
+# ==========================================
+# 🆕 ORDENS DE SERVIÇO (OS) — registro digital de OS em papel, com
+# foto e acompanhamento de status (Em Andamento / Concluído).
+# ==========================================
+@app.get("/api/ordens_servico")
+def listar_ordens_servico(status: Optional[str] = None):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if status:
+            cursor.execute(
+                "SELECT * FROM ordens_servico WHERE status = %s ORDER BY id DESC",
+                (status,)
+            )
+        else:
+            cursor.execute("SELECT * FROM ordens_servico ORDER BY id DESC")
+        return cursor.fetchall()
+
+
+@app.post("/api/ordens_servico")
+def criar_ordem_servico(dados: OrdemServicoCriar):
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO ordens_servico (numero_os, descricao, foto_base64, status, criado_por, criado_em)
+            VALUES (%s, %s, %s, 'Em Andamento', %s, %s)
+            RETURNING id
+            """,
+            (dados.numero_os, dados.descricao, dados.foto_base64, dados.operador, agora)
+        )
+        os_id = cursor.fetchone()["id"]
+        conn.commit()
+
+    return {"sucesso": True, "id": os_id}
+
+
+@app.post("/api/ordens_servico/status")
+def mudar_status_ordem_servico(dados: OrdemServicoStatus):
+    if dados.status not in ("Em Andamento", "Concluído"):
+        raise HTTPException(status_code=400, detail="Status inválido.")
+
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if dados.status == "Concluído":
+            cursor.execute(
+                "UPDATE ordens_servico SET status = %s, concluido_por = %s, concluido_em = %s WHERE id = %s",
+                (dados.status, dados.operador, agora, dados.id)
+            )
+        else:
+            # Voltando pra "Em Andamento" — limpa quem/quando concluiu,
+            # já que essa conclusão deixou de valer.
+            cursor.execute(
+                "UPDATE ordens_servico SET status = %s, concluido_por = NULL, concluido_em = NULL WHERE id = %s",
+                (dados.status, dados.id)
+            )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Ordem de serviço não encontrada.")
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+@app.post("/api/ordens_servico/excluir")
+def excluir_ordem_servico(dados: OrdemServicoExcluir):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM ordens_servico WHERE id = %s", (dados.id,))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Ordem de serviço não encontrada.")
+        conn.commit()
+
+    return {"sucesso": True}
