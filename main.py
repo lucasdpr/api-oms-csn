@@ -375,6 +375,14 @@ def init_db():
         # LAYOUT_ROLOS_POR_TIPO -> temMancais: true), mas o campo fica
         # disponível pra qualquer peça, igual rolos_travados.
         cursor.execute('''ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS mancais_ocorrencias TEXT''')
+        # 🆕 BARRA TRANSVERSAL: guarda um JSON (texto) com o estado de
+        # cada componente clicável do Sinótico 3D — cilindros de
+        # elevação (CIL-1..4), cilindros centrais (BALL-RE/BALL-AV) e a
+        # própria barra transversal (BARRA-TRANSVERSAL), ex:
+        # '{"CIL-2":{"flexivelAvanco":"amarelo","observacao":"..."}}'.
+        # Só se aplica a Bow, Horizontal e Straightener (R1/R2) — MCC4
+        # menos Molde e Bender (dados.js -> LAYOUT_BARRA_TRANSVERSAL_POR_TIPO).
+        cursor.execute('''ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS barra_transversal TEXT''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS log_apontamento_geral (
@@ -808,6 +816,7 @@ class PecaUpdate(BaseModel):
     observacao: Optional[str] = None
     rolos_travados: Optional[str] = None
     mancais_ocorrencias: Optional[str] = None
+    barra_transversal: Optional[str] = None
     # 🆕 Preenchidos SÓ quando o front-end registra uma ocorrência nova
     # (quebra de rolamento / vazamento de graxa / vazamento de água) num
     # mancal — não em toda troca de rolos_travados/observacao. Servem só
@@ -1063,6 +1072,8 @@ def atualizar_peca(peca: PecaUpdate):
         campos.append("rolos_travados = %s"); valores.append(peca.rolos_travados)
     if peca.mancais_ocorrencias is not None:
         campos.append("mancais_ocorrencias = %s"); valores.append(peca.mancais_ocorrencias)
+    if peca.barra_transversal is not None:
+        campos.append("barra_transversal = %s"); valores.append(peca.barra_transversal)
 
     if not campos:
         raise HTTPException(status_code=400, detail="Nenhum campo para atualizar foi enviado.")
@@ -1077,8 +1088,8 @@ def atualizar_peca(peca: PecaUpdate):
 
         if cursor.rowcount == 0:
             cursor.execute('''
-                INSERT INTO equipamentos (id, tipo, local, status, tonelagem, dias, meta, posicao, tag_patrimonio, data_entrada, data_reparo, substituido_por, observacao, rolos_travados, mancais_ocorrencias)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO equipamentos (id, tipo, local, status, tonelagem, dias, meta, posicao, tag_patrimonio, data_entrada, data_reparo, substituido_por, observacao, rolos_travados, mancais_ocorrencias, barra_transversal)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     tipo = EXCLUDED.tipo,
                     local = EXCLUDED.local,
@@ -1093,12 +1104,14 @@ def atualizar_peca(peca: PecaUpdate):
                     substituido_por = EXCLUDED.substituido_por,
                     observacao = EXCLUDED.observacao,
                     rolos_travados = EXCLUDED.rolos_travados,
-                    mancais_ocorrencias = EXCLUDED.mancais_ocorrencias
+                    mancais_ocorrencias = EXCLUDED.mancais_ocorrencias,
+                    barra_transversal = EXCLUDED.barra_transversal
             ''', (
                 peca.id, peca.tipo or "", peca.local or "", peca.status or "",
                 peca.tonelagem or 0, peca.dias or 0, peca.meta or 0, peca.posicao or "",
                 peca.tag_patrimonio, peca.data_entrada, peca.data_reparo,
-                peca.substituido_por, peca.observacao, peca.rolos_travados, peca.mancais_ocorrencias
+                peca.substituido_por, peca.observacao, peca.rolos_travados, peca.mancais_ocorrencias,
+                peca.barra_transversal
             ))
             criada = True
 
