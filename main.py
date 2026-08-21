@@ -1341,6 +1341,28 @@ def get_colaboradores():
         return cursor.fetchall()
 
 
+# Matrículas com acesso total a todas as áreas da Oficina (ADM). As
+# outras matrículas só enxergam a própria área, vinda de equipe_oficina
+# (ver AREA_OFICINA_NOMES acima e o mapeamento em
+# importar_efetivo_oficina.py). Mesmo padrão já usado no front-end para
+# MATRICULAS_TESTE_FOLHOES, em script.js.
+MATRICULAS_ADM = ("CBK3574", "CSP1869", "CSP6632")
+
+
+def _buscar_area_colaborador(cursor, matricula):
+    """Busca a área do colaborador em equipe_oficina. Retorna None se a
+    matrícula não estiver cadastrada lá (login e área vêm de planilhas
+    diferentes — ver importar_colaboradores.py x
+    importar_efetivo_oficina.py). None é tratado no front-end como
+    'sem área definida ainda', não como erro."""
+    cursor.execute(
+        "SELECT area FROM equipe_oficina WHERE matricula = %s AND ativo = TRUE",
+        (matricula,)
+    )
+    linha = cursor.fetchone()
+    return linha["area"] if linha else None
+
+
 @app.post("/api/colaboradores/login", tags=["Colaboradores"], summary="Autenticar colaborador (login)")
 def login_colaborador(dados: LoginColaborador):
     matricula = dados.matricula.strip().upper()
@@ -1353,28 +1375,36 @@ def login_colaborador(dados: LoginColaborador):
         )
         colaborador = cursor.fetchone()
 
-    if not colaborador:
-        raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
+        if not colaborador:
+            raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
 
-    if colaborador["primeiro_acesso"]:
-        if dados.senha.strip().upper() != matricula:
-            raise HTTPException(status_code=401, detail="No primeiro acesso, a senha é a sua própria matrícula.")
+        is_adm = matricula in MATRICULAS_ADM
+        # ADM não depende de equipe_oficina — acesso total sempre.
+        area = None if is_adm else _buscar_area_colaborador(cursor, matricula)
+
+        if colaborador["primeiro_acesso"]:
+            if dados.senha.strip().upper() != matricula:
+                raise HTTPException(status_code=401, detail="No primeiro acesso, a senha é a sua própria matrícula.")
+            return {
+                "sucesso": True,
+                "nome": colaborador["nome"],
+                "cargo": colaborador["cargo"],
+                "area": area,
+                "is_adm": is_adm,
+                "precisa_definir_senha": True
+            }
+
+        if not colaborador["senha_hash"] or not bcrypt.checkpw(dados.senha.encode(), colaborador["senha_hash"].encode()):
+            raise HTTPException(status_code=401, detail="Senha incorreta.")
+
         return {
             "sucesso": True,
             "nome": colaborador["nome"],
             "cargo": colaborador["cargo"],
-            "precisa_definir_senha": True
+            "area": area,
+            "is_adm": is_adm,
+            "precisa_definir_senha": False
         }
-
-    if not colaborador["senha_hash"] or not bcrypt.checkpw(dados.senha.encode(), colaborador["senha_hash"].encode()):
-        raise HTTPException(status_code=401, detail="Senha incorreta.")
-
-    return {
-        "sucesso": True,
-        "nome": colaborador["nome"],
-        "cargo": colaborador["cargo"],
-        "precisa_definir_senha": False
-    }
 
 
 @app.post("/api/colaboradores/definir_senha", tags=["Colaboradores"], summary="Definir senha no primeiro acesso")
@@ -1627,6 +1657,21 @@ def ajustar_hidraulica(dados: HidraulicaAjuste):
         conn.commit()
 
     return {"sucesso": True, "item": atualizado}
+
+
+@app.get("/api/folhao/rascunhos/todos", tags=["Folhões"], summary="Listar todos os folhões em andamento (rascunhos salvos)")
+def listar_todos_rascunhos_folhao():
+    """Usado na tela 'Em andamento' do Painel do Técnico: lista todo
+    folhão que tem progresso salvo na nuvem, pra qualquer um (técnico
+    da área certa, ou ADM) continuar de onde parou. O front-end filtra
+    por área cruzando equipamento_id com o tipo do equipamento — aqui
+    devolve tudo, sem filtro, igual as outras rotas de listagem."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT equipamento_id, tipo_folhao, etapa, atualizado_em, criado_em FROM folhoes_rascunho ORDER BY atualizado_em DESC"
+        )
+        return cursor.fetchall()
 
 
 @app.get("/api/folhao/{equipamento_id}", tags=["Folhões"], summary="Carregar rascunho salvo de um folhão")
