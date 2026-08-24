@@ -79,6 +79,15 @@ PUSH_HABILITADO = bool(VAPID_PRIVATE_KEY and VAPID_PUBLIC_KEY)
 if not PUSH_HABILITADO:
     print("⚠️ VAPID_PRIVATE_KEY/VAPID_PUBLIC_KEY não configuradas — push notification desativado.")
 
+# 🔧 TEMPORÁRIO: enquanto a filtragem por área de cada colaborador não
+# tá pronta pra valer (regra combinada: admin recebe tudo, técnico só
+# recebe da área dele), TODA notificação push vai só pros administradores
+# (MATRICULAS_ADM, definida mais abaixo) — pra não ficar disparando
+# notificação errada/repetida pra quem não devia receber ainda. Quando a
+# lógica por área estiver definida, é só apagar essa flag e o "if" que
+# ela liga em enviar_push_para_area().
+PUSH_RESTRITO_A_ADMINS = True
+
 db_pool = psycopg2_pool.ThreadedConnectionPool(
     minconn=1,
     maxconn=10,
@@ -541,6 +550,13 @@ def init_db():
         cursor.execute('''
             ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS prazo TEXT
         ''')
+        # 🆕 Marca se já foi disparada notificação de atraso pra essa
+        # atividade — sem isso, toda vez que alguém abrisse o app de
+        # novo (e a atividade continuasse atrasada), a notificação
+        # repetiria de novo e de novo.
+        cursor.execute('''
+            ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS notificado_atraso BOOLEAN DEFAULT FALSE
+        ''')
         # 🆕 Data de Início — quando preenchida com uma data futura, a
         # atividade fica "programada": existe no banco, mas o front-end
         # só mostra ela como "pra fazer" (Pendente/Em Andamento) a
@@ -831,7 +847,16 @@ def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str
     try:
         with get_db() as conn:
             cursor = conn.cursor()
-            if area == "Ambos":
+            if PUSH_RESTRITO_A_ADMINS:
+                # 🔧 TEMPORÁRIO — ver comentário na flag lá em cima.
+                # Ignora completamente o parâmetro "area" e manda só pra
+                # quem é administrador, não importa quem devia receber
+                # pela regra normal.
+                cursor.execute(
+                    "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE matricula = ANY(%s)",
+                    (list(MATRICULAS_ADM),)
+                )
+            elif area == "Ambos":
                 cursor.execute("SELECT endpoint, p256dh, auth FROM push_subscriptions")
             else:
                 cursor.execute("""
@@ -1202,6 +1227,16 @@ def atualizar_peca(peca: PecaUpdate):
 
     with get_db() as conn:
         cursor = conn.cursor()
+
+        # 🆕 Busca o estado ANTES da atualização, só pra poder comparar
+        # depois e saber se o status mudou pra "Reserva" ou se a peça foi
+        # trocada (substituido_por passou a ter valor) — sem isso, toda
+        # edição de peça pareceria uma troca/movimentação nova.
+        cursor.execute("SELECT status, substituido_por FROM equipamentos WHERE id = %s", (peca.id,))
+        estado_anterior = cursor.fetchone()
+        status_anterior = estado_anterior["status"] if estado_anterior else None
+        substituido_por_anterior = estado_anterior["substituido_por"] if estado_anterior else None
+
         cursor.execute(query, tuple(valores))
         criada = False
 
@@ -1244,6 +1279,26 @@ def atualizar_peca(peca: PecaUpdate):
         enviar_push_para_area(
             titulo=peca.mancal_evento_titulo or "⚠️ Ocorrência em mancal",
             corpo=peca.mancal_evento_corpo,
+            area="Ambos"
+        )
+
+    # 🆕 Notificação quando a peça vai (ou passa a ir) pra Reserva —
+    # só dispara na TROCA de status, não toda vez que alguém salva a
+    # peça já estando em Reserva.
+    if peca.status is not None and peca.status != status_anterior and peca.status.strip().lower() == "reserva":
+        enviar_push_para_area(
+            titulo="📦 Equipamento movido pra Reserva",
+            corpo=f"{peca.id} ({peca.tipo or 'equipamento'}) foi movido pro Estoque Reserva.",
+            area="Ambos"
+        )
+
+    # 🆕 Notificação de troca de peça — dispara quando o campo
+    # substituido_por passa a ter um valor novo (ou muda de valor),
+    # indicando que essa peça foi substituída por outra.
+    if peca.substituido_por is not None and peca.substituido_por.strip() and peca.substituido_por != substituido_por_anterior:
+        enviar_push_para_area(
+            titulo="🔁 Troca de equipamento",
+            corpo=f"{peca.id} foi substituído por {peca.substituido_por}.",
             area="Ambos"
         )
 
@@ -2046,14 +2101,65 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
     concluido_em = agora if dados.status == "Concluído" else None
     with get_db() as conn:
         cursor = conn.cursor()
+        # 🆕 Se a atividade voltou a ficar aberta (reaberta depois de
+        # concluída, por exemplo), reseta o aviso de atraso — se ela
+        # ficar atrasada de novo, precisa poder notificar de novo.
+        resetar_notificacao = dados.status != "Concluído"
         cursor.execute(
-            "UPDATE oficina_atividades SET status = %s, concluido_em = %s WHERE id = %s",
+            "UPDATE oficina_atividades SET status = %s, concluido_em = %s"
+            + (", notificado_atraso = FALSE" if resetar_notificacao else "")
+            + " WHERE id = %s",
             (dados.status, concluido_em, dados.id)
         )
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Atividade não encontrada.")
         conn.commit()
     return {"sucesso": True}
+
+
+# 🆕 Verificação de atividades atrasadas — não roda sozinha (o sistema
+# não tem um agendador/cron), então é chamada pelo front-end sempre que
+# o app é aberto (ver DOMContentLoaded em script.js). Cada atividade só
+# gera UMA notificação (controlado pela coluna notificado_atraso) —
+# reabrir a atividade (ver rota de status acima) é o que permite avisar
+# de novo se ela atrasar outra vez.
+@app.post("/api/oficina/verificar_atrasos", tags=["Oficina"], summary="Verificar atividades atrasadas e notificar")
+def verificar_atrasos_oficina():
+    hoje_str = agora_brasil().strftime("%Y-%m-%d")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, area, descricao, responsavel, prazo
+            FROM oficina_atividades
+            WHERE status != 'Concluído'
+              AND prazo IS NOT NULL AND prazo != '' AND prazo < %s
+              AND (data_inicio IS NULL OR data_inicio = '' OR data_inicio <= %s)
+              AND notificado_atraso = FALSE
+            """,
+            (hoje_str, hoje_str)
+        )
+        atrasadas = cursor.fetchall()
+
+        if not atrasadas:
+            return {"sucesso": True, "notificadas": 0}
+
+        ids = [a["id"] for a in atrasadas]
+        cursor.execute(
+            "UPDATE oficina_atividades SET notificado_atraso = TRUE WHERE id = ANY(%s)",
+            (ids,)
+        )
+        conn.commit()
+
+    for a in atrasadas:
+        nome_area = AREA_OFICINA_NOMES.get(a["area"], a["area"])
+        enviar_push_para_area(
+            titulo="⏰ Atividade atrasada",
+            corpo=f"{nome_area} — {a['descricao']} (prazo era {a['prazo']}, ainda não concluída).",
+            area="Ambos"
+        )
+
+    return {"sucesso": True, "notificadas": len(atrasadas)}
 
 
 @app.post("/api/oficina/atividade/excluir", tags=["Oficina"], summary="Excluir atividade da Oficina")
@@ -2359,6 +2465,13 @@ def criar_ordem_servico(dados: OrdemServicoCriar):
         )
         conn.commit()
 
+    # 🆕 Notificação de nova OS cadastrada.
+    enviar_push_para_area(
+        titulo="🆕 Nova OS cadastrada",
+        corpo=f"{dados.operador} registrou {dados.numero_os and f'a OS {dados.numero_os}' or f'a OS #{os_id}'}" + (f": {dados.descricao}" if dados.descricao else "."),
+        area="Ambos"
+    )
+
     return {"sucesso": True, "id": os_id}
 
 
@@ -2400,7 +2513,21 @@ def mudar_status_ordem_servico(dados: OrdemServicoStatus):
             )
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Ordem de serviço não encontrada.")
+
+        cursor.execute("SELECT numero_os FROM ordens_servico WHERE id = %s", (dados.id,))
+        os_atual = cursor.fetchone()
         conn.commit()
+
+    # 🆕 Notificação quando a OS é marcada como "Não Executada" (a
+    # "atividade não foi concluída" do jeito que ela fica registrada
+    # no sistema hoje).
+    if dados.status == "Não Executada":
+        rotulo_os = f"OS {os_atual['numero_os']}" if os_atual and os_atual["numero_os"] else f"OS #{dados.id}"
+        enviar_push_para_area(
+            titulo="🚫 OS não executada",
+            corpo=f"{dados.operador} marcou {rotulo_os} como não executada. Motivo: {dados.motivo.strip()}",
+            area="Ambos"
+        )
 
     return {"sucesso": True}
 
