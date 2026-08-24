@@ -646,6 +646,38 @@ def init_db():
             )
         ''')
 
+        # 🆕 QUALIDADE (Entrada/Saída) — o responsável pela Qualidade
+        # registra com fotos como o equipamento chegou na oficina (Entrada)
+        # e, quando o serviço termina, registra também como ele está saindo
+        # (Saída). Cada registro fica "Aguardando Saída" até a segunda
+        # etapa ser preenchida, quando vira "Concluído". Fotos de entrada e
+        # saída ficam numa tabela separada (qualidade_fotos, com a coluna
+        # etapa dizendo se é 'entrada' ou 'saida'), igual ao padrão já
+        # usado em os_fotos.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS qualidade_registros (
+                id SERIAL PRIMARY KEY,
+                peca_id TEXT NOT NULL,
+                observacao_entrada TEXT,
+                observacao_saida TEXT,
+                status TEXT DEFAULT 'Aguardando Saída',
+                criado_por TEXT,
+                criado_em TEXT,
+                concluido_por TEXT,
+                concluido_em TEXT
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS qualidade_fotos (
+                id SERIAL PRIMARY KEY,
+                registro_id INTEGER REFERENCES qualidade_registros(id) ON DELETE CASCADE,
+                etapa TEXT NOT NULL,
+                foto_base64 TEXT NOT NULL,
+                criado_em TEXT
+            )
+        ''')
+
         # 🆕 LAUDOS (PDFs de folhão finalizado) — antes ficavam SÓ no
         # localStorage de quem gerou o laudo (window.salvarLaudoNoHistorico
         # em script.js), então: 1) sumiam se a pessoa limpasse os dados do
@@ -1028,6 +1060,23 @@ class OrdemServicoStatus(BaseModel):
 
 
 class OrdemServicoExcluir(BaseModel):
+    id: int
+
+
+class QualidadeCriar(BaseModel):
+    peca_id: str
+    observacao_entrada: Optional[str] = None
+    fotos_entrada_base64: list[str] = []  # 1 registro pode ter várias fotos de entrada
+    operador: str
+
+
+class QualidadeSaida(BaseModel):
+    observacao_saida: Optional[str] = None
+    fotos_saida_base64: list[str] = []
+    operador: str
+
+
+class QualidadeExcluir(BaseModel):
     id: int
 
 
@@ -2306,6 +2355,113 @@ def excluir_ordem_servico(dados: OrdemServicoExcluir):
         cursor.execute("DELETE FROM ordens_servico WHERE id = %s", (dados.id,))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Ordem de serviço não encontrada.")
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+# ==========================================
+# 🆕 QUALIDADE (Entrada/Saída) — registro digital de como o equipamento
+# chegou na oficina e como está saindo, com fotos em cada etapa.
+# ==========================================
+@app.get("/api/qualidade", tags=["Qualidade"], summary="Listar registros de Qualidade")
+def listar_qualidade(status: Optional[str] = None):
+    """Lista os registros com uma foto de "capa" de cada etapa (entrada
+    e saída) — pra montar o card na lista sem precisar buscar TODAS as
+    fotos de TODOS os registros de uma vez."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        query = """
+            SELECT
+                r.*,
+                (SELECT f.foto_base64 FROM qualidade_fotos f WHERE f.registro_id = r.id AND f.etapa = 'entrada' ORDER BY f.id ASC LIMIT 1) AS foto_entrada_capa,
+                (SELECT f.foto_base64 FROM qualidade_fotos f WHERE f.registro_id = r.id AND f.etapa = 'saida' ORDER BY f.id ASC LIMIT 1) AS foto_saida_capa
+            FROM qualidade_registros r
+        """
+        if status:
+            query += " WHERE r.status = %s ORDER BY r.id DESC"
+            cursor.execute(query, (status,))
+        else:
+            query += " ORDER BY r.id DESC"
+            cursor.execute(query)
+        return cursor.fetchall()
+
+
+@app.get("/api/qualidade/{registro_id}/fotos", tags=["Qualidade"], summary="Listar fotos (entrada ou saída) de um registro")
+def get_fotos_qualidade(registro_id: int, etapa: str):
+    if etapa not in ("entrada", "saida"):
+        raise HTTPException(status_code=400, detail="Etapa inválida.")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, foto_base64, criado_em FROM qualidade_fotos WHERE registro_id = %s AND etapa = %s ORDER BY id ASC",
+            (registro_id, etapa)
+        )
+        return cursor.fetchall()
+
+
+@app.post("/api/qualidade", tags=["Qualidade"], summary="Registrar entrada de um equipamento na oficina")
+def criar_qualidade(dados: QualidadeCriar):
+    if not dados.fotos_entrada_base64:
+        raise HTTPException(status_code=400, detail="É preciso pelo menos 1 foto de entrada.")
+
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO qualidade_registros (peca_id, observacao_entrada, status, criado_por, criado_em)
+            VALUES (%s, %s, 'Aguardando Saída', %s, %s)
+            RETURNING id
+            """,
+            (dados.peca_id, dados.observacao_entrada, dados.operador, agora)
+        )
+        registro_id = cursor.fetchone()["id"]
+
+        cursor.executemany(
+            "INSERT INTO qualidade_fotos (registro_id, etapa, foto_base64, criado_em) VALUES (%s, 'entrada', %s, %s)",
+            [(registro_id, foto, agora) for foto in dados.fotos_entrada_base64]
+        )
+        conn.commit()
+
+    return {"sucesso": True, "id": registro_id}
+
+
+@app.post("/api/qualidade/{registro_id}/saida", tags=["Qualidade"], summary="Registrar saída de um equipamento da oficina")
+def registrar_saida_qualidade(registro_id: int, dados: QualidadeSaida):
+    if not dados.fotos_saida_base64:
+        raise HTTPException(status_code=400, detail="É preciso pelo menos 1 foto de saída.")
+
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE qualidade_registros
+               SET status = 'Concluído', observacao_saida = %s, concluido_por = %s, concluido_em = %s
+               WHERE id = %s""",
+            (dados.observacao_saida, dados.operador, agora, registro_id)
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Registro de qualidade não encontrado.")
+
+        cursor.executemany(
+            "INSERT INTO qualidade_fotos (registro_id, etapa, foto_base64, criado_em) VALUES (%s, 'saida', %s, %s)",
+            [(registro_id, foto, agora) for foto in dados.fotos_saida_base64]
+        )
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+@app.post("/api/qualidade/excluir", tags=["Qualidade"], summary="Excluir um registro de Qualidade")
+def excluir_qualidade(dados: QualidadeExcluir):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        # qualidade_fotos tem ON DELETE CASCADE — apagar o registro já
+        # apaga as fotos dele junto, sem precisar de um DELETE separado.
+        cursor.execute("DELETE FROM qualidade_registros WHERE id = %s", (dados.id,))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Registro de qualidade não encontrado.")
         conn.commit()
 
     return {"sucesso": True}
