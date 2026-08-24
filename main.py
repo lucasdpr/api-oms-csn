@@ -527,6 +527,15 @@ def init_db():
         cursor.execute('''
             ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS prazo TEXT
         ''')
+        # 🆕 Data de Início — quando preenchida com uma data futura, a
+        # atividade fica "programada": existe no banco, mas o front-end
+        # só mostra ela como "pra fazer" (Pendente/Em Andamento) a
+        # partir desse dia. Sem valor, conta como já disponível pra
+        # começar (compatível com todo registro antigo, que não tem
+        # essa coluna preenchida).
+        cursor.execute('''
+            ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS data_inicio TEXT
+        ''')
 
         # 📝 Anotações livres por área (materiais/procedimento — provisório).
         cursor.execute('''
@@ -954,6 +963,7 @@ class OficinaAtividade(BaseModel):
     operador: str
     foto_base64: Optional[str] = None  # data URL (ex: "data:image/jpeg;base64,...")
     prazo: Optional[str] = None        # data no formato "YYYY-MM-DD", opcional
+    data_inicio: Optional[str] = None  # data no formato "YYYY-MM-DD", opcional — quando futura, a atividade fica "programada"
 
 
 class OficinaStatus(BaseModel):
@@ -999,6 +1009,7 @@ class OficinaAtividadeEditar(BaseModel):
     responsavel: Optional[str] = None
     prioridade: Optional[str] = "Normal"
     prazo: Optional[str] = None
+    data_inicio: Optional[str] = None
     foto_base64: Optional[str] = None  # null = sem foto anexada / mantém a que já tinha, ver rota
 
 
@@ -1887,12 +1898,12 @@ def criar_atividade_oficina(dados: OficinaAtividade):
         cursor.execute(
             """
             INSERT INTO oficina_atividades
-                (area, equipamento_id, descricao, responsavel, prioridade, status, criado_por, criado_em, foto_base64, prazo)
-            VALUES (%s, %s, %s, %s, %s, 'Pendente', %s, %s, %s, %s)
+                (area, equipamento_id, descricao, responsavel, prioridade, status, criado_por, criado_em, foto_base64, prazo, data_inicio)
+            VALUES (%s, %s, %s, %s, %s, 'Pendente', %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (dados.area, dados.equipamento_id, dados.descricao, dados.responsavel,
-             dados.prioridade or "Normal", dados.operador, agora, dados.foto_base64, dados.prazo)
+             dados.prioridade or "Normal", dados.operador, agora, dados.foto_base64, dados.prazo, dados.data_inicio)
         )
         atividade_id = cursor.fetchone()["id"]
         conn.commit()
@@ -1903,13 +1914,19 @@ def criar_atividade_oficina(dados: OficinaAtividade):
     # exibição), o alvo é "Ambos" — todo mundo logado com notificação
     # ligada. Se no futuro os líderes de área tiverem login vinculado à
     # área, dá pra refinar esse filtro.
-    nome_area = AREA_OFICINA_NOMES.get(dados.area, dados.area)
-    is_alta_prioridade = (dados.prioridade or "Normal") == "Alta"
-    enviar_push_para_area(
-        titulo="🔴 Atividade prioritária na Oficina" if is_alta_prioridade else f"🧰 Nova atividade — {nome_area}",
-        corpo=f"{dados.operador} — {nome_area}: {dados.descricao}",
-        area="Ambos"
-    )
+    # 🆕 Se a atividade tem Data de Início futura, ela ainda não é "pra
+    # fazer agora" — não faz sentido avisar hoje algo que só vale daqui
+    # a X dias, então o push fica pra quando ela realmente começar.
+    hoje_str = datetime.now().strftime("%Y-%m-%d")
+    eh_programada_pro_futuro = bool(dados.data_inicio) and dados.data_inicio > hoje_str
+    if not eh_programada_pro_futuro:
+        nome_area = AREA_OFICINA_NOMES.get(dados.area, dados.area)
+        is_alta_prioridade = (dados.prioridade or "Normal") == "Alta"
+        enviar_push_para_area(
+            titulo="🔴 Atividade prioritária na Oficina" if is_alta_prioridade else f"🧰 Nova atividade — {nome_area}",
+            corpo=f"{dados.operador} — {nome_area}: {dados.descricao}",
+            area="Ambos"
+        )
 
     return {"sucesso": True, "id": atividade_id}
 
@@ -2071,11 +2088,11 @@ def editar_atividade_oficina(dados: OficinaAtividadeEditar):
             """
             UPDATE oficina_atividades
             SET equipamento_id = %s, descricao = %s, responsavel = %s,
-                prioridade = %s, prazo = %s, foto_base64 = %s
+                prioridade = %s, prazo = %s, data_inicio = %s, foto_base64 = %s
             WHERE id = %s
             """,
             (dados.equipamento_id, dados.descricao, dados.responsavel,
-             dados.prioridade or "Normal", dados.prazo, dados.foto_base64, dados.id)
+             dados.prioridade or "Normal", dados.prazo, dados.data_inicio, dados.foto_base64, dados.id)
         )
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Atividade não encontrada.")
