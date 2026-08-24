@@ -1,6 +1,7 @@
 ﻿import os
 from contextlib import contextmanager
 from datetime import datetime
+from datetime import timezone, timedelta
 from typing import Optional
 
 import bcrypt
@@ -15,6 +16,19 @@ from pywebpush import webpush, WebPushException
 import json as json_lib
 
 load_dotenv()
+
+# 🕒 Servidor roda em UTC (padrão em serviços de deploy tipo Render), mas
+# a fábrica é no Brasil (UTC-3, sem horário de verão desde 2019). Sem
+# isso, todo horário salvo no banco (criado_em, concluido_em etc.) ficava
+# 3h à frente do horário real de quem tava usando o app. Esse helper
+# substitui datetime.now() em TODA a API — trocar aqui já corrige todo
+# mundo de uma vez.
+FUSO_BRASIL = timezone(timedelta(hours=-3))
+
+
+def agora_brasil() -> datetime:
+    return datetime.now(FUSO_BRASIL)
+
 
 tags_metadata = [
     {"name": "Sistema", "description": "Verificações de saúde do servidor e do banco de dados."},
@@ -725,7 +739,7 @@ def init_db():
         # pra não reinserir toda vez que o servidor sobe.
         cursor.execute("SELECT COUNT(*) as qtd FROM materiais_area WHERE area = 'segmento-grupo'")
         if cursor.fetchone()["qtd"] == 0:
-            agora_seed = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            agora_seed = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
             cursor.executemany('''
                 INSERT INTO materiais_area (area, codigo, descricao, criado_por, criado_em)
                 VALUES ('segmento-grupo', %s, %s, 'Sistema (importado)', %s)
@@ -1252,7 +1266,7 @@ def excluir_peca(peca: PecaExcluir):
 
 @app.post("/api/apontar_producao_geral", tags=["Produção"], summary="Apontar produção (geral)")
 def apontar_producao_geral(dados: ProducaoGeral):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1286,7 +1300,7 @@ def apontar_producao_geral(dados: ProducaoGeral):
 
 @app.post("/api/apontar_moldes", tags=["Produção"], summary="Apontar produção de moldes")
 def apontar_moldes(dados: ApontamentoMoldes):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1414,7 +1428,7 @@ def ping_db():
 
 @app.post("/api/registrar_evento", tags=["Auditoria"], summary="Registrar um evento na Auditoria")
 def registrar_evento(evento: EventoLog):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -1810,7 +1824,7 @@ def get_rascunho_folhao(equipamento_id: str):
 
 @app.post("/api/folhao/salvar", tags=["Folhões"], summary="Salvar progresso de um folhão")
 def salvar_rascunho_folhao(dados: FolhaoRascunhoSalvar):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1853,7 +1867,7 @@ def get_vapid_public_key():
 
 @app.post("/api/push/subscribe", tags=["Notificações Push"], summary="Inscrever dispositivo pra notificações push")
 def subscribe_push(dados: PushSubscribe):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -1885,7 +1899,7 @@ def unsubscribe_push(dados: PushUnsubscribe):
 # ==========================================
 @app.post("/api/registro_com_foto", tags=["Registros e Ocorrências"], summary="Registrar Intervenção/Melhoria/Comentário/Ocorrência com foto")
 def registrar_com_foto(dados: RegistroComFoto):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1986,7 +2000,7 @@ def listar_atividades_oficina(area: Optional[str] = None, status: Optional[str] 
 
 @app.post("/api/oficina/atividade", tags=["Oficina"], summary="Criar atividade da Oficina")
 def criar_atividade_oficina(dados: OficinaAtividade):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -2011,7 +2025,7 @@ def criar_atividade_oficina(dados: OficinaAtividade):
     # 🆕 Se a atividade tem Data de Início futura, ela ainda não é "pra
     # fazer agora" — não faz sentido avisar hoje algo que só vale daqui
     # a X dias, então o push fica pra quando ela realmente começar.
-    hoje_str = datetime.now().strftime("%Y-%m-%d")
+    hoje_str = agora_brasil().strftime("%Y-%m-%d")
     eh_programada_pro_futuro = bool(dados.data_inicio) and dados.data_inicio > hoje_str
     if not eh_programada_pro_futuro:
         nome_area = AREA_OFICINA_NOMES.get(dados.area, dados.area)
@@ -2028,7 +2042,7 @@ def criar_atividade_oficina(dados: OficinaAtividade):
 
 @app.post("/api/oficina/atividade/status", tags=["Oficina"], summary="Mudar status de uma atividade da Oficina")
 def mudar_status_atividade_oficina(dados: OficinaStatus):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     concluido_em = agora if dados.status == "Concluído" else None
     with get_db() as conn:
         cursor = conn.cursor()
@@ -2068,7 +2082,7 @@ def get_nota_area_oficina(area: str):
 
 @app.post("/api/oficina/nota", tags=["Oficina"], summary="Salvar anotações de uma área")
 def salvar_nota_area_oficina(dados: OficinaNota):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -2139,7 +2153,7 @@ def get_materiais_area_oficina(area: str):
 
 @app.post("/api/oficina/materiais", tags=["Oficina"], summary="Cadastrar material numa área")
 def criar_material_area_oficina(dados: OficinaMaterial):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -2203,7 +2217,7 @@ def editar_atividade_oficina(dados: OficinaAtividadeEditar):
 # foi mesmo seguido por completo na última execução?").
 @app.post("/api/oficina/procedimento/executar", tags=["Oficina"], summary="Registrar execução de um procedimento")
 def registrar_execucao_procedimento(dados: ProcedimentoExecucao):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -2326,7 +2340,7 @@ def criar_ordem_servico(dados: OrdemServicoCriar):
     if not dados.fotos_base64:
         raise HTTPException(status_code=400, detail="É preciso pelo menos 1 foto da OS.")
 
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -2355,7 +2369,7 @@ def mudar_status_ordem_servico(dados: OrdemServicoStatus):
     if dados.status == "Não Executada" and not (dados.motivo and dados.motivo.strip()):
         raise HTTPException(status_code=400, detail="Informe o motivo/justificativa pra marcar como Não Executada.")
 
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         if dados.status == "Concluído":
@@ -2452,7 +2466,7 @@ def criar_qualidade(dados: QualidadeCriar):
     if not dados.fotos_entrada_base64:
         raise HTTPException(status_code=400, detail="É preciso pelo menos 1 foto de entrada.")
 
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -2487,7 +2501,7 @@ def registrar_saida_qualidade(registro_id: int, dados: QualidadeSaida):
     if not dados.fotos_saida_base64:
         raise HTTPException(status_code=400, detail="É preciso pelo menos 1 foto de saída.")
 
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -2541,7 +2555,7 @@ def criar_achado_qualidade(dados: QualidadeAchadoCriar):
     if not dados.descricao or not dados.descricao.strip():
         raise HTTPException(status_code=400, detail="Descreva o achado.")
 
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM qualidade_registros WHERE id = %s", (dados.registro_id,))
@@ -2564,7 +2578,7 @@ def criar_achado_qualidade(dados: QualidadeAchadoCriar):
 
 @app.post("/api/qualidade/achados/resolver", tags=["Qualidade"], summary="Marcar um achado como resolvido")
 def resolver_achado_qualidade(dados: QualidadeAchadoResolver):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -2641,7 +2655,7 @@ def get_laudo(laudo_id: int):
 
 @app.post("/api/laudos", tags=["Laudos"], summary="Salvar um laudo gerado")
 def criar_laudo(dados: LaudoCriar):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
