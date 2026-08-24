@@ -79,14 +79,17 @@ PUSH_HABILITADO = bool(VAPID_PRIVATE_KEY and VAPID_PUBLIC_KEY)
 if not PUSH_HABILITADO:
     print("⚠️ VAPID_PRIVATE_KEY/VAPID_PUBLIC_KEY não configuradas — push notification desativado.")
 
-# 🔧 TEMPORÁRIO: enquanto a filtragem por área de cada colaborador não
-# tá pronta pra valer (regra combinada: admin recebe tudo, técnico só
-# recebe da área dele), TODA notificação push vai só pros administradores
-# (MATRICULAS_ADM, definida mais abaixo) — pra não ficar disparando
-# notificação errada/repetida pra quem não devia receber ainda. Quando a
-# lógica por área estiver definida, é só apagar essa flag e o "if" que
-# ela liga em enviar_push_para_area().
-PUSH_RESTRITO_A_ADMINS = True
+# 🆕 Regra de notificação por área: administrador (MATRICULAS_ADM,
+# definida mais abaixo) recebe TODA notificação, não importa a área.
+# Colaborador comum só recebe quando a notificação é da área dele
+# (comparando com o campo "area" salvo em colaboradores/equipe_oficina).
+# Eventos "gerais" (produção, OS, ocorrência, peça pra Reserva, troca de
+# equipamento...) não têm uma área da oficina associada de forma
+# confiável no banco hoje — só uma peça/equipamento, não um responsável
+# por área — então esses continuam só pros administradores por enquanto.
+# Só as notificações de Atividade da Oficina (nova / atrasada) já têm o
+# campo "area" certo pra valer, e são as que de fato chegam pros
+# técnicos da área correspondente.
 
 db_pool = psycopg2_pool.ThreadedConnectionPool(
     minconn=1,
@@ -730,6 +733,19 @@ def init_db():
             )
         ''')
 
+        # 🆕 Um achado pode ter mais de 1 foto (antes só tinha a coluna
+        # foto_base64 na própria tabela, limitando a 1). A coluna antiga
+        # continua existindo pra não perder foto de achado já cadastrado
+        # antes dessa mudança — achados novos usam essa tabela.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS qualidade_achado_fotos (
+                id SERIAL PRIMARY KEY,
+                achado_id INTEGER REFERENCES qualidade_achados(id) ON DELETE CASCADE,
+                foto_base64 TEXT NOT NULL,
+                criado_em TEXT
+            )
+        ''')
+
         # 🆕 LAUDOS (PDFs de folhão finalizado) — antes ficavam SÓ no
         # localStorage de quem gerou o laudo (window.salvarLaudoNoHistorico
         # em script.js), então: 1) sumiam se a pessoa limpasse os dados do
@@ -847,24 +863,25 @@ def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str
     try:
         with get_db() as conn:
             cursor = conn.cursor()
-            if PUSH_RESTRITO_A_ADMINS:
-                # 🔧 TEMPORÁRIO — ver comentário na flag lá em cima.
-                # Ignora completamente o parâmetro "area" e manda só pra
-                # quem é administrador, não importa quem devia receber
-                # pela regra normal.
+            if area == "Ambos":
+                # Evento sem área da oficina associada (produção, OS,
+                # ocorrência, peça pra Reserva, troca de equipamento...)
+                # — só os administradores recebem, porque não dá pra
+                # saber qual técnico deveria ser avisado.
                 cursor.execute(
                     "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE matricula = ANY(%s)",
                     (list(MATRICULAS_ADM),)
                 )
-            elif area == "Ambos":
-                cursor.execute("SELECT endpoint, p256dh, auth FROM push_subscriptions")
             else:
+                # Evento COM área da oficina (atividade nova/atrasada) —
+                # administrador recebe sempre + quem tiver exatamente
+                # essa área cadastrada.
                 cursor.execute("""
                     SELECT ps.endpoint, ps.p256dh, ps.auth
                     FROM push_subscriptions ps
                     JOIN colaboradores c ON c.matricula = ps.matricula
-                    WHERE c.area = %s OR c.area = 'Ambos'
-                """, (area,))
+                    WHERE c.matricula = ANY(%s) OR c.area = %s
+                """, (list(MATRICULAS_ADM), area))
             inscricoes = cursor.fetchall()
 
         payload = json_lib.dumps({"titulo": titulo, "corpo": corpo, "url": url})
@@ -1126,7 +1143,7 @@ class OrdemServicoExcluir(BaseModel):
 
 class QualidadeAchadoInput(BaseModel):
     descricao: str
-    foto_base64: Optional[str] = None
+    fotos_base64: list[str] = []  # 🆕 um achado pode ter mais de 1 foto
 
 
 class QualidadeCriar(BaseModel):
@@ -1150,7 +1167,13 @@ class QualidadeExcluir(BaseModel):
 class QualidadeAchadoCriar(BaseModel):
     registro_id: int
     descricao: str
-    foto_base64: Optional[str] = None
+    fotos_base64: list[str] = []  # 🆕 um achado pode ter mais de 1 foto
+    operador: str
+
+
+class QualidadeAchadoEditar(BaseModel):
+    id: int
+    descricao: str
     operador: str
 
 
@@ -2031,12 +2054,18 @@ def get_registros_ocorrencia(categoria: Optional[str] = None, limite: int = 100)
 # OFICINA — ATIVIDADES POR ÁREA (v1)
 # ==========================================
 @app.get("/api/oficina/atividades", tags=["Oficina"], summary="Listar atividades da Oficina")
-def listar_atividades_oficina(area: Optional[str] = None, status: Optional[str] = None):
+def listar_atividades_oficina(area: Optional[str] = None, status: Optional[str] = None, limite: int = 1000):
     """
     Lista as atividades da oficina. Sem filtro, traz TUDO — a grade de
     áreas no front-end filtra por área no próprio navegador (evita uma
     chamada de API por card). Os filtros opcionais ficam disponíveis
     caso precise no futuro (ex: um relatório só de pendências).
+
+    O "limite" aqui é bem mais alto que nas outras listagens (Ocorrência,
+    OS, Qualidade) DE PROPÓSITO — o front-end depende de receber tudo de
+    uma vez pra montar a grade de todas as áreas. É só um teto de
+    segurança pra não buscar um histórico infinito, não um paginado de
+    verdade como as outras.
     """
     with get_db() as conn:
         cursor = conn.cursor()
@@ -2048,7 +2077,8 @@ def listar_atividades_oficina(area: Optional[str] = None, status: Optional[str] 
         if status:
             query += " AND status = %s"
             params.append(status)
-        query += " ORDER BY id DESC"
+        query += " ORDER BY id DESC LIMIT %s"
+        params.append(limite)
         cursor.execute(query, params)
         return cursor.fetchall()
 
@@ -2088,7 +2118,7 @@ def criar_atividade_oficina(dados: OficinaAtividade):
         enviar_push_para_area(
             titulo="🔴 Atividade prioritária na Oficina" if is_alta_prioridade else f"🧰 Nova atividade — {nome_area}",
             corpo=f"{dados.operador} — {nome_area}: {dados.descricao}",
-            area="Ambos"
+            area=dados.area
         )
 
     return {"sucesso": True, "id": atividade_id}
@@ -2156,7 +2186,7 @@ def verificar_atrasos_oficina():
         enviar_push_para_area(
             titulo="⏰ Atividade atrasada",
             corpo=f"{nome_area} — {a['descricao']} (prazo era {a['prazo']}, ainda não concluída).",
-            area="Ambos"
+            area=a["area"]
         )
 
     return {"sucesso": True, "notificadas": len(atrasadas)}
@@ -2406,7 +2436,7 @@ def historico_execucoes_procedimento(area: str, procedimento_id: Optional[str] =
 # Andamento / Concluído).
 # ==========================================
 @app.get("/api/ordens_servico", tags=["Ordens de Serviço (OS)"], summary="Listar Ordens de Serviço")
-def listar_ordens_servico(status: Optional[str] = None):
+def listar_ordens_servico(status: Optional[str] = None, limite: int = 100):
     """Lista as OS com uma foto de "capa" (a primeira cadastrada) e o
     total de fotos — pra montar o card na lista sem precisar buscar
     TODAS as fotos de TODAS as OS de uma vez (isso ficaria pesado)."""
@@ -2420,11 +2450,11 @@ def listar_ordens_servico(status: Optional[str] = None):
             FROM ordens_servico o
         """
         if status:
-            query += " WHERE o.status = %s ORDER BY o.id DESC"
-            cursor.execute(query, (status,))
+            query += " WHERE o.status = %s ORDER BY o.id DESC LIMIT %s"
+            cursor.execute(query, (status, limite))
         else:
-            query += " ORDER BY o.id DESC"
-            cursor.execute(query)
+            query += " ORDER BY o.id DESC LIMIT %s"
+            cursor.execute(query, (limite,))
         return cursor.fetchall()
 
 
@@ -2551,7 +2581,7 @@ def excluir_ordem_servico(dados: OrdemServicoExcluir):
 # chegou na oficina e como está saindo, com fotos em cada etapa.
 # ==========================================
 @app.get("/api/qualidade", tags=["Qualidade"], summary="Listar registros de Qualidade")
-def listar_qualidade(status: Optional[str] = None):
+def listar_qualidade(status: Optional[str] = None, limite: int = 100):
     """Lista os registros com uma foto de "capa" de cada etapa (entrada
     e saída) — pra montar o card na lista sem precisar buscar TODAS as
     fotos de TODOS os registros de uma vez."""
@@ -2567,11 +2597,11 @@ def listar_qualidade(status: Optional[str] = None):
             FROM qualidade_registros r
         """
         if status:
-            query += " WHERE r.status = %s ORDER BY r.id DESC"
-            cursor.execute(query, (status,))
+            query += " WHERE r.status = %s ORDER BY r.id DESC LIMIT %s"
+            cursor.execute(query, (status, limite))
         else:
-            query += " ORDER BY r.id DESC"
-            cursor.execute(query)
+            query += " ORDER BY r.id DESC LIMIT %s"
+            cursor.execute(query, (limite,))
         return cursor.fetchall()
 
 
@@ -2612,11 +2642,21 @@ def criar_qualidade(dados: QualidadeCriar):
         )
 
         if dados.achados:
-            cursor.executemany(
-                """INSERT INTO qualidade_achados (registro_id, descricao, foto_base64, status, criado_por, criado_em)
-                   VALUES (%s, %s, %s, 'Pendente', %s, %s)""",
-                [(registro_id, a.descricao.strip(), a.foto_base64, dados.operador, agora) for a in dados.achados if a.descricao and a.descricao.strip()]
-            )
+            for a in dados.achados:
+                if not a.descricao or not a.descricao.strip():
+                    continue
+                cursor.execute(
+                    """INSERT INTO qualidade_achados (registro_id, descricao, status, criado_por, criado_em)
+                       VALUES (%s, %s, 'Pendente', %s, %s)
+                       RETURNING id""",
+                    (registro_id, a.descricao.strip(), dados.operador, agora)
+                )
+                achado_id = cursor.fetchone()["id"]
+                if a.fotos_base64:
+                    cursor.executemany(
+                        "INSERT INTO qualidade_achado_fotos (achado_id, foto_base64, criado_em) VALUES (%s, %s, %s)",
+                        [(achado_id, foto, agora) for foto in a.fotos_base64]
+                    )
 
         conn.commit()
 
@@ -2664,17 +2704,54 @@ def excluir_qualidade(dados: QualidadeExcluir):
 
 
 # ---- ACHADOS: cada problema encontrado pela Qualidade vira uma linha
-# própria (com foto opcional), separada da observação geral, com status
-# individual Pendente/Resolvido. ----
+# própria (com fotos opcionais), separada da observação geral, com
+# status individual Pendente/Resolvido. ----
 @app.get("/api/qualidade/{registro_id}/achados", tags=["Qualidade"], summary="Listar achados de um registro")
 def listar_achados_qualidade(registro_id: int):
+    """Traz cada achado com uma foto de "capa" (a primeira, se tiver
+    mais de uma) e o total de fotos — pra montar o card na lista sem
+    precisar buscar todas as fotos de todos os achados de uma vez."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT * FROM qualidade_achados WHERE registro_id = %s ORDER BY id ASC",
+            """
+            SELECT
+                a.*,
+                COALESCE(
+                    (SELECT f.foto_base64 FROM qualidade_achado_fotos f WHERE f.achado_id = a.id ORDER BY f.id ASC LIMIT 1),
+                    a.foto_base64
+                ) AS foto_capa,
+                (SELECT COUNT(*) FROM qualidade_achado_fotos f WHERE f.achado_id = a.id) AS total_fotos
+            FROM qualidade_achados a
+            WHERE a.registro_id = %s
+            ORDER BY a.id ASC
+            """,
             (registro_id,)
         )
         return cursor.fetchall()
+
+
+@app.get("/api/qualidade/achados/{achado_id}/fotos", tags=["Qualidade"], summary="Listar todas as fotos de um achado")
+def get_fotos_achado_qualidade(achado_id: int):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, foto_base64, criado_em FROM qualidade_achado_fotos WHERE achado_id = %s ORDER BY id ASC",
+            (achado_id,)
+        )
+        fotos = cursor.fetchall()
+
+        # 🔧 Achado antigo (de antes dessa mudança) só tem a foto na
+        # coluna foto_base64 da própria tabela, não em
+        # qualidade_achado_fotos — cai aqui como fallback pra galeria
+        # não aparecer vazia pra quem já tinha achado cadastrado.
+        if not fotos:
+            cursor.execute("SELECT foto_base64 FROM qualidade_achados WHERE id = %s", (achado_id,))
+            achado = cursor.fetchone()
+            if achado and achado["foto_base64"]:
+                return [{"id": None, "foto_base64": achado["foto_base64"], "criado_em": None}]
+
+        return fotos
 
 
 @app.post("/api/qualidade/achados", tags=["Qualidade"], summary="Adicionar um achado a um registro de Qualidade")
@@ -2691,16 +2768,41 @@ def criar_achado_qualidade(dados: QualidadeAchadoCriar):
 
         cursor.execute(
             """
-            INSERT INTO qualidade_achados (registro_id, descricao, foto_base64, status, criado_por, criado_em)
-            VALUES (%s, %s, %s, 'Pendente', %s, %s)
+            INSERT INTO qualidade_achados (registro_id, descricao, status, criado_por, criado_em)
+            VALUES (%s, %s, 'Pendente', %s, %s)
             RETURNING id
             """,
-            (dados.registro_id, dados.descricao.strip(), dados.foto_base64, dados.operador, agora)
+            (dados.registro_id, dados.descricao.strip(), dados.operador, agora)
         )
         achado_id = cursor.fetchone()["id"]
+
+        if dados.fotos_base64:
+            cursor.executemany(
+                "INSERT INTO qualidade_achado_fotos (achado_id, foto_base64, criado_em) VALUES (%s, %s, %s)",
+                [(achado_id, foto, agora) for foto in dados.fotos_base64]
+            )
+
         conn.commit()
 
     return {"sucesso": True, "id": achado_id}
+
+
+@app.post("/api/qualidade/achados/editar", tags=["Qualidade"], summary="Editar a descrição de um achado")
+def editar_achado_qualidade(dados: QualidadeAchadoEditar):
+    if not dados.descricao or not dados.descricao.strip():
+        raise HTTPException(status_code=400, detail="Descreva o achado.")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE qualidade_achados SET descricao = %s WHERE id = %s",
+            (dados.descricao.strip(), dados.id)
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Achado não encontrado.")
+        conn.commit()
+
+    return {"sucesso": True}
 
 
 @app.post("/api/qualidade/achados/resolver", tags=["Qualidade"], summary="Marcar um achado como resolvido")
