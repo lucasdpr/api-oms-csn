@@ -678,6 +678,28 @@ def init_db():
             )
         ''')
 
+        # 🆕 QUALIDADE — ACHADOS: em vez de 1 observação corrida só, cada
+        # problema que o inspetor encontra (ex: "distribuidor vazando")
+        # vira uma linha própria, com foto opcional e status individual
+        # (Pendente -> Resolvido). Pode ser adicionado a qualquer momento
+        # enquanto o registro estiver "Aguardando Saída" — não só na
+        # entrada — porque a Qualidade pode ir achando coisa durante o
+        # processo também.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS qualidade_achados (
+                id SERIAL PRIMARY KEY,
+                registro_id INTEGER REFERENCES qualidade_registros(id) ON DELETE CASCADE,
+                descricao TEXT NOT NULL,
+                foto_base64 TEXT,
+                status TEXT DEFAULT 'Pendente',
+                criado_por TEXT,
+                criado_em TEXT,
+                foto_resolucao_base64 TEXT,
+                resolvido_por TEXT,
+                resolvido_em TEXT
+            )
+        ''')
+
         # 🆕 LAUDOS (PDFs de folhão finalizado) — antes ficavam SÓ no
         # localStorage de quem gerou o laudo (window.salvarLaudoNoHistorico
         # em script.js), então: 1) sumiam se a pessoa limpasse os dados do
@@ -1063,10 +1085,16 @@ class OrdemServicoExcluir(BaseModel):
     id: int
 
 
+class QualidadeAchadoInput(BaseModel):
+    descricao: str
+    foto_base64: Optional[str] = None
+
+
 class QualidadeCriar(BaseModel):
     peca_id: str
     observacao_entrada: Optional[str] = None
     fotos_entrada_base64: list[str] = []  # 1 registro pode ter várias fotos de entrada
+    achados: list[QualidadeAchadoInput] = []  # problemas já encontrados na inspeção de entrada
     operador: str
 
 
@@ -1077,6 +1105,23 @@ class QualidadeSaida(BaseModel):
 
 
 class QualidadeExcluir(BaseModel):
+    id: int
+
+
+class QualidadeAchadoCriar(BaseModel):
+    registro_id: int
+    descricao: str
+    foto_base64: Optional[str] = None
+    operador: str
+
+
+class QualidadeAchadoResolver(BaseModel):
+    id: int
+    foto_base64: Optional[str] = None
+    operador: str
+
+
+class QualidadeAchadoExcluir(BaseModel):
     id: int
 
 
@@ -2375,7 +2420,9 @@ def listar_qualidade(status: Optional[str] = None):
             SELECT
                 r.*,
                 (SELECT f.foto_base64 FROM qualidade_fotos f WHERE f.registro_id = r.id AND f.etapa = 'entrada' ORDER BY f.id ASC LIMIT 1) AS foto_entrada_capa,
-                (SELECT f.foto_base64 FROM qualidade_fotos f WHERE f.registro_id = r.id AND f.etapa = 'saida' ORDER BY f.id ASC LIMIT 1) AS foto_saida_capa
+                (SELECT f.foto_base64 FROM qualidade_fotos f WHERE f.registro_id = r.id AND f.etapa = 'saida' ORDER BY f.id ASC LIMIT 1) AS foto_saida_capa,
+                (SELECT COUNT(*) FROM qualidade_achados a WHERE a.registro_id = r.id) AS achados_total,
+                (SELECT COUNT(*) FROM qualidade_achados a WHERE a.registro_id = r.id AND a.status = 'Pendente') AS achados_pendentes
             FROM qualidade_registros r
         """
         if status:
@@ -2422,6 +2469,14 @@ def criar_qualidade(dados: QualidadeCriar):
             "INSERT INTO qualidade_fotos (registro_id, etapa, foto_base64, criado_em) VALUES (%s, 'entrada', %s, %s)",
             [(registro_id, foto, agora) for foto in dados.fotos_entrada_base64]
         )
+
+        if dados.achados:
+            cursor.executemany(
+                """INSERT INTO qualidade_achados (registro_id, descricao, foto_base64, status, criado_por, criado_em)
+                   VALUES (%s, %s, %s, 'Pendente', %s, %s)""",
+                [(registro_id, a.descricao.strip(), a.foto_base64, dados.operador, agora) for a in dados.achados if a.descricao and a.descricao.strip()]
+            )
+
         conn.commit()
 
     return {"sucesso": True, "id": registro_id}
@@ -2457,11 +2512,98 @@ def registrar_saida_qualidade(registro_id: int, dados: QualidadeSaida):
 def excluir_qualidade(dados: QualidadeExcluir):
     with get_db() as conn:
         cursor = conn.cursor()
-        # qualidade_fotos tem ON DELETE CASCADE — apagar o registro já
-        # apaga as fotos dele junto, sem precisar de um DELETE separado.
+        # qualidade_fotos e qualidade_achados têm ON DELETE CASCADE —
+        # apagar o registro já apaga fotos e achados junto.
         cursor.execute("DELETE FROM qualidade_registros WHERE id = %s", (dados.id,))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Registro de qualidade não encontrado.")
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+# ---- ACHADOS: cada problema encontrado pela Qualidade vira uma linha
+# própria (com foto opcional), separada da observação geral, com status
+# individual Pendente/Resolvido. ----
+@app.get("/api/qualidade/{registro_id}/achados", tags=["Qualidade"], summary="Listar achados de um registro")
+def listar_achados_qualidade(registro_id: int):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM qualidade_achados WHERE registro_id = %s ORDER BY id ASC",
+            (registro_id,)
+        )
+        return cursor.fetchall()
+
+
+@app.post("/api/qualidade/achados", tags=["Qualidade"], summary="Adicionar um achado a um registro de Qualidade")
+def criar_achado_qualidade(dados: QualidadeAchadoCriar):
+    if not dados.descricao or not dados.descricao.strip():
+        raise HTTPException(status_code=400, detail="Descreva o achado.")
+
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM qualidade_registros WHERE id = %s", (dados.registro_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Registro de qualidade não encontrado.")
+
+        cursor.execute(
+            """
+            INSERT INTO qualidade_achados (registro_id, descricao, foto_base64, status, criado_por, criado_em)
+            VALUES (%s, %s, %s, 'Pendente', %s, %s)
+            RETURNING id
+            """,
+            (dados.registro_id, dados.descricao.strip(), dados.foto_base64, dados.operador, agora)
+        )
+        achado_id = cursor.fetchone()["id"]
+        conn.commit()
+
+    return {"sucesso": True, "id": achado_id}
+
+
+@app.post("/api/qualidade/achados/resolver", tags=["Qualidade"], summary="Marcar um achado como resolvido")
+def resolver_achado_qualidade(dados: QualidadeAchadoResolver):
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE qualidade_achados
+               SET status = 'Resolvido', foto_resolucao_base64 = %s, resolvido_por = %s, resolvido_em = %s
+               WHERE id = %s""",
+            (dados.foto_base64, dados.operador, agora, dados.id)
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Achado não encontrado.")
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+@app.post("/api/qualidade/achados/reabrir", tags=["Qualidade"], summary="Reabrir um achado marcado como resolvido")
+def reabrir_achado_qualidade(dados: QualidadeAchadoExcluir):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE qualidade_achados
+               SET status = 'Pendente', foto_resolucao_base64 = NULL, resolvido_por = NULL, resolvido_em = NULL
+               WHERE id = %s""",
+            (dados.id,)
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Achado não encontrado.")
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+@app.post("/api/qualidade/achados/excluir", tags=["Qualidade"], summary="Excluir um achado")
+def excluir_achado_qualidade(dados: QualidadeAchadoExcluir):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM qualidade_achados WHERE id = %s", (dados.id,))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Achado não encontrado.")
         conn.commit()
 
     return {"sucesso": True}
