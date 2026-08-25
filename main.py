@@ -30,6 +30,14 @@ def agora_brasil() -> datetime:
     return datetime.now(FUSO_BRASIL)
 
 
+# 🔐 Mesma lista de matrículas ADM usada no front-end (script.js ->
+# MATRICULAS_ADM). Repetida aqui porque o back-end não importa o
+# front-end — quem mexe numa precisa lembrar de mexer na outra. Usada
+# pra travar quem pode cadastrar/editar/reordenar/excluir etapas do
+# Checklist de Execução (só essas 3 matrículas, não qualquer ADM).
+MATRICULAS_CHECKLIST_EXECUCAO_ADMIN = ["CBK3574", "CSP1869", "CSP6632"]
+
+
 tags_metadata = [
     {"name": "Sistema", "description": "Verificações de saúde do servidor e do banco de dados."},
     {"name": "Peças", "description": "Cadastro, edição, exclusão e histórico de fotos das peças/equipamentos."},
@@ -753,6 +761,62 @@ def init_db():
         # aparelho, nem na Auditoria de ninguém além de quem gerou. Agora
         # o HTML completo do laudo é salvo no Neon, igual todo o resto do
         # sistema.
+        # 🆕 CHECKLIST DE EXECUÇÃO — passo a passo REAL de como os técnicos
+        # fazem o reparo (diferente do "Procedimento" oficial, que já
+        # existe mas não reflete o passo a passo de verdade). Cada etapa
+        # é cadastrada por EQUIPAMENTO específico (não por tipo genérico)
+        # e pertence a uma seção/área (mecânica, elétrica, hidráulica,
+        # caldeiraria, usinagem, tubulação, jato). "ordem" controla a
+        # posição da etapa dentro da seção — dá pra reordenar e inserir
+        # etapa esquecida no meio depois.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS checklist_execucao_etapas (
+                id SERIAL PRIMARY KEY,
+                equipamento_id TEXT NOT NULL,
+                area TEXT NOT NULL,
+                texto TEXT NOT NULL,
+                ordem INTEGER DEFAULT 0,
+                ativo BOOLEAN DEFAULT TRUE,
+                criado_por TEXT,
+                criado_em TEXT
+            )
+        ''')
+
+        # Estado ATUAL de cada etapa (marcada ou não), 1 linha por etapa
+        # (UNIQUE em etapa_id). "colaborador" é quem realmente executou
+        # (pode ser diferente de quem marcou/está logado — ex: técnico
+        # marca, mas quem fez foi o eletricista/hidráulico da equipe).
+        # "tecnico_matricula/nome" é sempre quem está logado marcando.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS checklist_execucao_marcacoes (
+                id SERIAL PRIMARY KEY,
+                etapa_id INTEGER NOT NULL REFERENCES checklist_execucao_etapas(id) ON DELETE CASCADE,
+                equipamento_id TEXT NOT NULL,
+                marcado BOOLEAN DEFAULT FALSE,
+                colaborador TEXT,
+                tecnico_matricula TEXT,
+                tecnico_nome TEXT,
+                data_hora TEXT,
+                UNIQUE(etapa_id)
+            )
+        ''')
+
+        # Histórico de marcações/desmarcações — guarda TODO evento (não só
+        # o estado atual), pra registrar retrabalho: se uma etapa marcada
+        # foi desmarcada e refeita, fica tudo salvo aqui pra consulta.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS checklist_execucao_historico (
+                id SERIAL PRIMARY KEY,
+                etapa_id INTEGER NOT NULL REFERENCES checklist_execucao_etapas(id) ON DELETE CASCADE,
+                equipamento_id TEXT NOT NULL,
+                acao TEXT NOT NULL,
+                colaborador TEXT,
+                tecnico_matricula TEXT,
+                tecnico_nome TEXT,
+                data_hora TEXT
+            )
+        ''')
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS laudos (
                 id SERIAL PRIMARY KEY,
@@ -1110,6 +1174,43 @@ class ProcedimentoExecucao(BaseModel):
     total_etapas: Optional[int] = None
     concluido: bool = False
     operador: Optional[str] = None
+
+
+class ChecklistExecucaoEtapaNova(BaseModel):
+    equipamento_id: str
+    area: str
+    texto: str
+    operador: str  # matrícula de quem está cadastrando (checado contra ADM)
+
+
+class ChecklistExecucaoEtapaEditar(BaseModel):
+    id: int
+    texto: str
+    operador: str
+
+
+class ChecklistExecucaoEtapaExcluir(BaseModel):
+    id: int
+    operador: str
+
+
+class ChecklistExecucaoEtapaReordenarItem(BaseModel):
+    id: int
+    ordem: int
+
+
+class ChecklistExecucaoReordenar(BaseModel):
+    itens: list[ChecklistExecucaoEtapaReordenarItem]
+    operador: str
+
+
+class ChecklistExecucaoMarcar(BaseModel):
+    etapa_id: int
+    equipamento_id: str
+    marcado: bool
+    colaborador: Optional[str] = None  # quem realmente executou a etapa
+    tecnico_matricula: Optional[str] = None
+    tecnico_nome: str
 
 
 class OficinaAtividadeEditar(BaseModel):
@@ -2429,6 +2530,178 @@ def historico_execucoes_procedimento(area: str, procedimento_id: Optional[str] =
                 (area, limite)
             )
         return cursor.fetchall()
+
+# ==========================================
+# 🆕 CHECKLIST DE EXECUÇÃO — passo a passo REAL do reparo (por
+# equipamento, dividido em seções: mecânica, elétrica, hidráulica,
+# caldeiraria, usinagem, tubulação, jato). Diferente do "Procedimento"
+# oficial (procedimentos_execucoes acima) — este é editável só pelas 3
+# matrículas admin e reflete o jeito que os técnicos realmente fazem.
+# ==========================================
+
+@app.get("/api/checklist-execucao/etapas/{equipamento_id}", tags=["Checklist de Execução"], summary="Listar etapas de um equipamento (com estado atual)")
+def listar_etapas_checklist_execucao(equipamento_id: str):
+    """Retorna todas as etapas cadastradas pra esse equipamento, já com o
+    estado atual (marcada ou não, quem marcou, qual colaborador) e
+    agrupáveis por 'area' no front-end."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT e.id, e.area, e.texto, e.ordem,
+                   COALESCE(m.marcado, FALSE) AS marcado,
+                   m.colaborador, m.tecnico_matricula, m.tecnico_nome, m.data_hora
+            FROM checklist_execucao_etapas e
+            LEFT JOIN checklist_execucao_marcacoes m ON m.etapa_id = e.id
+            WHERE e.equipamento_id = %s AND e.ativo = TRUE
+            ORDER BY e.area, e.ordem, e.id
+            """,
+            (equipamento_id,)
+        )
+        return cursor.fetchall()
+
+
+@app.get("/api/checklist-execucao/status/{equipamento_id}", tags=["Checklist de Execução"], summary="Percentual concluído do checklist de execução")
+def status_checklist_execucao(equipamento_id: str):
+    """Usado pra decidir se o botão 'Concluir' pode ser liberado: retorna
+    total de etapas, quantas estão marcadas e o percentual. Se não
+    houver nenhuma etapa cadastrada ainda pra esse equipamento,
+    'completo' vem False (não faz sentido liberar Concluir sem
+    checklist nenhum montado)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE m.marcado = TRUE) AS marcadas
+            FROM checklist_execucao_etapas e
+            LEFT JOIN checklist_execucao_marcacoes m ON m.etapa_id = e.id
+            WHERE e.equipamento_id = %s AND e.ativo = TRUE
+            """,
+            (equipamento_id,)
+        )
+        row = cursor.fetchone()
+        total = row["total"] or 0
+        marcadas = row["marcadas"] or 0
+        percentual = round((marcadas / total) * 100, 1) if total > 0 else 0
+        return {
+            "total": total,
+            "marcadas": marcadas,
+            "percentual": percentual,
+            "completo": total > 0 and marcadas == total
+        }
+
+
+@app.post("/api/checklist-execucao/etapas", tags=["Checklist de Execução"], summary="Cadastrar nova etapa (só ADM do checklist)")
+def criar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaNova):
+    if dados.operador.upper() not in MATRICULAS_CHECKLIST_EXECUCAO_ADMIN:
+        raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem cadastrar etapas do checklist.")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COALESCE(MAX(ordem), 0) + 1 AS proxima FROM checklist_execucao_etapas WHERE equipamento_id = %s AND area = %s",
+            (dados.equipamento_id, dados.area)
+        )
+        proxima_ordem = cursor.fetchone()["proxima"]
+        cursor.execute(
+            """
+            INSERT INTO checklist_execucao_etapas (equipamento_id, area, texto, ordem, criado_por, criado_em)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+            """,
+            (dados.equipamento_id, dados.area, dados.texto, proxima_ordem, dados.operador, agora_brasil().isoformat())
+        )
+        novo_id = cursor.fetchone()["id"]
+        conn.commit()
+        return {"sucesso": True, "id": novo_id}
+
+
+@app.post("/api/checklist-execucao/etapas/editar", tags=["Checklist de Execução"], summary="Editar texto de uma etapa (só ADM do checklist)")
+def editar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaEditar):
+    if dados.operador.upper() not in MATRICULAS_CHECKLIST_EXECUCAO_ADMIN:
+        raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem editar etapas do checklist.")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE checklist_execucao_etapas SET texto = %s WHERE id = %s", (dados.texto, dados.id))
+        conn.commit()
+    return {"sucesso": True}
+
+
+@app.post("/api/checklist-execucao/etapas/excluir", tags=["Checklist de Execução"], summary="Excluir (desativar) uma etapa (só ADM do checklist)")
+def excluir_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaExcluir):
+    if dados.operador.upper() not in MATRICULAS_CHECKLIST_EXECUCAO_ADMIN:
+        raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem excluir etapas do checklist.")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        # Desativa em vez de apagar de verdade — preserva o histórico
+        # (checklist_execucao_historico) de quem já executou essa etapa.
+        cursor.execute("UPDATE checklist_execucao_etapas SET ativo = FALSE WHERE id = %s", (dados.id,))
+        conn.commit()
+    return {"sucesso": True}
+
+
+@app.post("/api/checklist-execucao/etapas/reordenar", tags=["Checklist de Execução"], summary="Reordenar etapas dentro de uma seção (só ADM do checklist)")
+def reordenar_etapas_checklist_execucao(dados: ChecklistExecucaoReordenar):
+    if dados.operador.upper() not in MATRICULAS_CHECKLIST_EXECUCAO_ADMIN:
+        raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem reordenar etapas do checklist.")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        for item in dados.itens:
+            cursor.execute("UPDATE checklist_execucao_etapas SET ordem = %s WHERE id = %s", (item.ordem, item.id))
+        conn.commit()
+    return {"sucesso": True}
+
+
+@app.post("/api/checklist-execucao/marcar", tags=["Checklist de Execução"], summary="Marcar ou desmarcar uma etapa executada")
+def marcar_etapa_checklist_execucao(dados: ChecklistExecucaoMarcar):
+    """Marca/desmarca uma etapa. Qualquer técnico logado pode marcar (não
+    só os 3 ADM — essa checagem é só pra CADASTRAR etapa). Desmarcar uma
+    etapa já feita = retrabalho: o histórico completo fica registrado em
+    checklist_execucao_historico, mesmo que o estado atual mude."""
+    agora = agora_brasil().isoformat()
+    acao = "marcou" if dados.marcado else "desmarcou (retrabalho)"
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO checklist_execucao_marcacoes (etapa_id, equipamento_id, marcado, colaborador, tecnico_matricula, tecnico_nome, data_hora)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (etapa_id) DO UPDATE SET
+                marcado = EXCLUDED.marcado,
+                colaborador = EXCLUDED.colaborador,
+                tecnico_matricula = EXCLUDED.tecnico_matricula,
+                tecnico_nome = EXCLUDED.tecnico_nome,
+                data_hora = EXCLUDED.data_hora
+            """,
+            (dados.etapa_id, dados.equipamento_id, dados.marcado, dados.colaborador, dados.tecnico_matricula, dados.tecnico_nome, agora)
+        )
+        cursor.execute(
+            """
+            INSERT INTO checklist_execucao_historico (etapa_id, equipamento_id, acao, colaborador, tecnico_matricula, tecnico_nome, data_hora)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (dados.etapa_id, dados.equipamento_id, acao, dados.colaborador, dados.tecnico_matricula, dados.tecnico_nome, agora)
+        )
+        conn.commit()
+    return {"sucesso": True}
+
+
+@app.get("/api/checklist-execucao/historico/{equipamento_id}", tags=["Checklist de Execução"], summary="Histórico completo (inclui retrabalhos)")
+def historico_checklist_execucao(equipamento_id: str, limite: int = 200):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT h.id, h.etapa_id, e.area, e.texto, h.acao, h.colaborador,
+                   h.tecnico_matricula, h.tecnico_nome, h.data_hora
+            FROM checklist_execucao_historico h
+            JOIN checklist_execucao_etapas e ON e.id = h.etapa_id
+            WHERE h.equipamento_id = %s
+            ORDER BY h.id DESC LIMIT %s
+            """,
+            (equipamento_id, limite)
+        )
+        return cursor.fetchall()
+
 
 # ==========================================
 # 🆕 ORDENS DE SERVIÇO (OS) — registro digital de OS em papel (várias
