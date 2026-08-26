@@ -409,6 +409,15 @@ def init_db():
         # LAYOUT_ROLOS_POR_TIPO -> temMancais: true), mas o campo fica
         # disponível pra qualquer peça, igual rolos_travados.
         cursor.execute('''ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS mancais_ocorrencias TEXT''')
+        # 🆕 CORREÇÃO CRÍTICA: essa coluna nunca existiu no banco — o
+        # "mcc_compat" (que diz se o equipamento é MCC 2/3 ou MCC 4) só
+        # vivia no localStorage do navegador que cadastrou a peça. Quando
+        # outro login/dispositivo sincronizava com a nuvem, recebia o
+        # equipamento SEM esse campo, e o front-end (`a.mcc_compat ||
+        # "2/3"`) assumia "2/3" por padrão — fazendo um Molde MCC4
+        # cadastrado corretamente "virar" MCC 2/3 pros outros usuários,
+        # inclusive gerando o Folhão errado. Agora persiste de verdade.
+        cursor.execute('''ALTER TABLE equipamentos ADD COLUMN IF NOT EXISTS mcc_compat TEXT''')
         # 🆕 BARRA TRANSVERSAL: guarda um JSON (texto) com o estado de
         # cada componente clicável do Sinótico 3D — cilindros de
         # elevação (CIL-1..4), cilindros centrais (BALL-RE/BALL-AV) e a
@@ -1059,6 +1068,7 @@ def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str
 class PecaUpdate(BaseModel):
     id: str
     tipo: Optional[str] = None
+    mcc_compat: Optional[str] = None  # 🆕 "2/3" ou "4" — agora persistido de verdade
     tonelagem: Optional[float] = None
     dias: Optional[int] = None
     local: Optional[str] = None
@@ -1430,6 +1440,8 @@ def atualizar_peca(peca: PecaUpdate):
 
     if peca.tipo is not None:
         campos.append("tipo = %s"); valores.append(peca.tipo)
+    if peca.mcc_compat is not None:
+        campos.append("mcc_compat = %s"); valores.append(peca.mcc_compat)
     if peca.tonelagem is not None:
         campos.append("tonelagem = %s"); valores.append(peca.tonelagem)
     if peca.dias is not None:
@@ -1482,10 +1494,11 @@ def atualizar_peca(peca: PecaUpdate):
 
         if cursor.rowcount == 0:
             cursor.execute('''
-                INSERT INTO equipamentos (id, tipo, local, status, tonelagem, dias, meta, posicao, tag_patrimonio, data_entrada, data_reparo, substituido_por, observacao, rolos_travados, mancais_ocorrencias, barra_transversal)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO equipamentos (id, tipo, mcc_compat, local, status, tonelagem, dias, meta, posicao, tag_patrimonio, data_entrada, data_reparo, substituido_por, observacao, rolos_travados, mancais_ocorrencias, barra_transversal)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     tipo = EXCLUDED.tipo,
+                    mcc_compat = EXCLUDED.mcc_compat,
                     local = EXCLUDED.local,
                     status = EXCLUDED.status,
                     tonelagem = EXCLUDED.tonelagem,
@@ -1501,7 +1514,7 @@ def atualizar_peca(peca: PecaUpdate):
                     mancais_ocorrencias = EXCLUDED.mancais_ocorrencias,
                     barra_transversal = EXCLUDED.barra_transversal
             ''', (
-                peca.id, peca.tipo or "", peca.local or "", peca.status or "",
+                peca.id, peca.tipo or "", peca.mcc_compat or "", peca.local or "", peca.status or "",
                 peca.tonelagem or 0, peca.dias or 0, peca.meta or 0, peca.posicao or "",
                 peca.tag_patrimonio, peca.data_entrada, peca.data_reparo,
                 peca.substituido_por, peca.observacao, peca.rolos_travados, peca.mancais_ocorrencias,
