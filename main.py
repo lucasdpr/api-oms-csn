@@ -769,6 +769,27 @@ def init_db():
         # caldeiraria, usinagem, tubulação, jato). "ordem" controla a
         # posição da etapa dentro da seção — dá pra reordenar e inserir
         # etapa esquecida no meio depois.
+        # 🆕 EXECUÇÕES — 1 linha = 1 reparo real de 1 tag específica (ex:
+        # M4-12, do dia 26/08). É isso que faltava: antes, "marcar uma
+        # etapa" só sabia de qual ETAPA era, não de qual REPARO — o que
+        # quebraria na hora de compartilhar as mesmas etapas entre vários
+        # moldes do mesmo tipo (marcar no M4-12 ia aparecer marcado no
+        # M4-15 também, por engano). Agora cada execução tem seu próprio
+        # id, e as marcações ficam amarradas nele.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS checklist_execucao_execucoes (
+                id SERIAL PRIMARY KEY,
+                equipamento_id TEXT NOT NULL,
+                tipo_equipamento TEXT NOT NULL,
+                tipo_execucao TEXT NOT NULL,
+                tecnico_matricula TEXT,
+                tecnico_nome TEXT,
+                iniciada_em TEXT,
+                concluida_em TEXT,
+                status TEXT DEFAULT 'em_andamento'
+            )
+        ''')
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS checklist_execucao_etapas (
                 id SERIAL PRIMARY KEY,
@@ -782,15 +803,15 @@ def init_db():
             )
         ''')
 
-        # Estado ATUAL de cada etapa (marcada ou não), 1 linha por etapa
-        # (UNIQUE em etapa_id). "colaborador" é quem realmente executou
-        # (pode ser diferente de quem marcou/está logado — ex: técnico
-        # marca, mas quem fez foi o eletricista/hidráulico da equipe).
-        # "tecnico_matricula/nome" é sempre quem está logado marcando.
+        # Estado ATUAL de cada etapa (marcada ou não), agora 1 linha por
+        # (execução, etapa) — não mais 1 linha por etapa sozinha. Isso é
+        # o que permite a MESMA etapa (cadastrada uma vez pro tipo de
+        # equipamento) ser marcada de forma independente em cada reparo.
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS checklist_execucao_marcacoes (
                 id SERIAL PRIMARY KEY,
                 etapa_id INTEGER NOT NULL REFERENCES checklist_execucao_etapas(id) ON DELETE CASCADE,
+                execucao_id INTEGER REFERENCES checklist_execucao_execucoes(id) ON DELETE CASCADE,
                 equipamento_id TEXT NOT NULL,
                 marcado BOOLEAN DEFAULT FALSE,
                 colaborador TEXT,
@@ -799,6 +820,24 @@ def init_db():
                 data_hora TEXT,
                 UNIQUE(etapa_id)
             )
+        ''')
+
+        # 🆕 Corrige a trava de unicidade: antes era só (etapa_id), o que
+        # travava 1 marcação por etapa NO SISTEMA INTEIRO. Agora precisa
+        # ser (execucao_id, etapa_id) — 1 marcação por etapa DENTRO DE
+        # CADA reparo. O nome da constraint antiga segue o padrão padrão
+        # do Postgres pra UNIQUE(coluna) numa CREATE TABLE.
+        cursor.execute('''
+            ALTER TABLE checklist_execucao_marcacoes
+            DROP CONSTRAINT IF EXISTS checklist_execucao_marcacoes_etapa_id_key
+        ''')
+        cursor.execute('''
+            ALTER TABLE checklist_execucao_marcacoes
+            ADD COLUMN IF NOT EXISTS execucao_id INTEGER REFERENCES checklist_execucao_execucoes(id) ON DELETE CASCADE
+        ''')
+        cursor.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS checklist_execucao_marcacoes_execucao_etapa_key
+            ON checklist_execucao_marcacoes (execucao_id, etapa_id)
         ''')
 
         # Histórico de marcações/desmarcações — guarda TODO evento (não só
@@ -815,6 +854,40 @@ def init_db():
                 tecnico_nome TEXT,
                 data_hora TEXT
             )
+        ''')
+
+        # 🆕 PONTE COM O FOLHÃO — colunas aditivas, todas com valor
+        # default NULL/'sim_nao'. Nenhuma etapa ou marcação já existente
+        # muda de comportamento: elas simplesmente ficam com essas
+        # colunas vazias até serem editadas pra usar a ponte.
+        # - folhao_campo: id do campo no documento oficial (ex:
+        #   "m4-aj-tfr") que essa etapa deve preencher sozinha.
+        # - tipo_resposta: "sim_nao" (padrão, igual hoje) ou "medicao"
+        #   (guarda um valor/número em vez de só marcado/desmarcado).
+        cursor.execute('''
+            ALTER TABLE checklist_execucao_etapas
+            ADD COLUMN IF NOT EXISTS folhao_campo TEXT,
+            ADD COLUMN IF NOT EXISTS tipo_resposta TEXT DEFAULT 'sim_nao'
+        ''')
+
+        # - valor: resposta de medição (torque, folga, etc.) — NULL pra
+        #   etapas sim/não, que continuam usando só "marcado".
+        # - trocado: só usado quando a execução é "parcial" — indica se
+        #   ESSE item foi de fato trocado/interveio (True) ou só
+        #   conferido/OK (False). NULL em execuções "geral".
+        cursor.execute('''
+            ALTER TABLE checklist_execucao_marcacoes
+            ADD COLUMN IF NOT EXISTS valor TEXT,
+            ADD COLUMN IF NOT EXISTS trocado BOOLEAN
+        ''')
+
+        # 🆕 Passo a passo de referência (o "como fazer" daquele tópico,
+        # ex: régua -> talha -> parafusos -> retirar -> bancada). É texto
+        # fixo, escrito 1 vez no cadastro — não é preenchido pelo técnico
+        # na execução, é só consulta.
+        cursor.execute('''
+            ALTER TABLE checklist_execucao_etapas
+            ADD COLUMN IF NOT EXISTS descricao TEXT
         ''')
 
         cursor.execute('''
@@ -1177,10 +1250,43 @@ class ProcedimentoExecucao(BaseModel):
 
 
 class ChecklistExecucaoEtapaNova(BaseModel):
+    # 🆕 IMPORTANTE: a partir de agora, equipamento_id aqui guarda o TIPO
+    # de equipamento (ex: "molde-mcc4"), não mais uma tag específica (ex:
+    # "M4-12"). Assim a mesma etapa vale pra TODO equipamento daquele
+    # tipo, em vez de precisar recadastrar tudo pra cada peça nova.
     equipamento_id: str
     area: str
     texto: str
     operador: str  # matrícula de quem está cadastrando (checado contra ADM)
+    # 🆕 Ponte com o Folhão: id do campo no documento oficial (ex:
+    # "m4-aj-tfr") pro qual essa etapa deve jogar o valor automaticamente.
+    # Opcional — etapa sem isso continua funcionando igual, só não
+    # preenche folhão nenhum sozinha.
+    folhao_campo: Optional[str] = None
+    # 🆕 Que tipo de resposta essa etapa espera: "sim_nao" (padrão,
+    # comportamento atual), "medicao" (1 valor só) ou "medicao_multipla"
+    # (várias medidas de uma vez, tipo a tabela de Folga Aresta).
+    tipo_resposta: str = "sim_nao"
+    # 🆕 Passo a passo de referência (o "como fazer"), pra quando o
+    # técnico quiser consultar o detalhe. Não é preenchido na hora da
+    # execução — é texto fixo, escrito 1 vez no cadastro da etapa.
+    descricao: Optional[str] = None
+
+
+class ChecklistExecucaoIniciar(BaseModel):
+    # 🆕 Início de uma EXECUÇÃO — 1 reparo real de 1 tag específica.
+    # É esse id (execucao_id) que vai amarrar cada marcação ao reparo
+    # certo, mesmo que as etapas sejam compartilhadas com outras peças
+    # do mesmo tipo.
+    equipamento_id: str        # tag específica, ex: "M4-12"
+    tipo_equipamento: str      # ex: "molde-mcc4" — de onde vêm as etapas
+    tipo_execucao: str         # "geral" ou "parcial"
+    tecnico_matricula: Optional[str] = None
+    tecnico_nome: str
+
+
+class ChecklistExecucaoFinalizar(BaseModel):
+    execucao_id: int
 
 
 class ChecklistExecucaoEtapaEditar(BaseModel):
@@ -1206,11 +1312,21 @@ class ChecklistExecucaoReordenar(BaseModel):
 
 class ChecklistExecucaoMarcar(BaseModel):
     etapa_id: int
-    equipamento_id: str
+    execucao_id: int  # 🆕 substitui equipamento_id como chave da marcação
+    equipamento_id: str  # mantido pra consulta/histórico rápido (tag)
     marcado: bool
     colaborador: Optional[str] = None  # quem realmente executou a etapa
     tecnico_matricula: Optional[str] = None
     tecnico_nome: str
+    # 🆕 Pra etapas de medição (tipo_resposta = "medicao"): o valor
+    # digitado (ex: "298" pro torque). Fica NULL pras etapas sim/não,
+    # que continuam usando só o "marcado".
+    valor: Optional[str] = None
+    # 🆕 Só relevante quando a execução é "parcial": marca se ESSE item
+    # específico foi trocado/interveio (True) ou só conferido/OK
+    # (False). Em execução "geral" não precisa mandar isso — o backend
+    # assume tudo como trocado.
+    trocado: Optional[bool] = None
 
 
 class OficinaAtividadeEditar(BaseModel):
@@ -2539,57 +2655,162 @@ def historico_execucoes_procedimento(area: str, procedimento_id: Optional[str] =
 # matrículas admin e reflete o jeito que os técnicos realmente fazem.
 # ==========================================
 
-@app.get("/api/checklist-execucao/etapas/{equipamento_id}", tags=["Checklist de Execução"], summary="Listar etapas de um equipamento (com estado atual)")
-def listar_etapas_checklist_execucao(equipamento_id: str):
-    """Retorna todas as etapas cadastradas pra esse equipamento, já com o
-    estado atual (marcada ou não, quem marcou, qual colaborador) e
-    agrupáveis por 'area' no front-end."""
+@app.get("/api/checklist-execucao/etapas/{tipo_equipamento}", tags=["Checklist de Execução"], summary="Listar etapas de um TIPO de equipamento (com estado da execução atual)")
+def listar_etapas_checklist_execucao(tipo_equipamento: str, execucao_id: Optional[int] = None):
+    """🆕 Agora busca por TIPO de equipamento (ex: "molde-mcc4"), não mais
+    por tag específica — assim a mesma etapa vale pra todo molde MCC4.
+    `execucao_id` (opcional, vem de /execucoes/iniciar ou do /status) diz
+    de QUAL reparo puxar o estado marcado/valor — sem isso, todas as
+    etapas voltam como não marcadas (só a "receita", sem progresso)."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT e.id, e.area, e.texto, e.ordem,
+            SELECT e.id, e.area, e.texto, e.ordem, e.folhao_campo, e.tipo_resposta, e.descricao,
                    COALESCE(m.marcado, FALSE) AS marcado,
-                   m.colaborador, m.tecnico_matricula, m.tecnico_nome, m.data_hora
+                   m.colaborador, m.tecnico_matricula, m.tecnico_nome, m.data_hora,
+                   m.valor, m.trocado
             FROM checklist_execucao_etapas e
-            LEFT JOIN checklist_execucao_marcacoes m ON m.etapa_id = e.id
+            LEFT JOIN checklist_execucao_marcacoes m
+                   ON m.etapa_id = e.id AND m.execucao_id = %s
             WHERE e.equipamento_id = %s AND e.ativo = TRUE
             ORDER BY e.area, e.ordem, e.id
             """,
-            (equipamento_id,)
+            (execucao_id, tipo_equipamento)
         )
         return cursor.fetchall()
 
 
-@app.get("/api/checklist-execucao/status/{equipamento_id}", tags=["Checklist de Execução"], summary="Percentual concluído do checklist de execução")
-def status_checklist_execucao(equipamento_id: str):
-    """Usado pra decidir se o botão 'Concluir' pode ser liberado: retorna
-    total de etapas, quantas estão marcadas e o percentual. Se não
-    houver nenhuma etapa cadastrada ainda pra esse equipamento,
-    'completo' vem False (não faz sentido liberar Concluir sem
-    checklist nenhum montado)."""
+@app.post("/api/checklist-execucao/execucoes/iniciar", tags=["Checklist de Execução"], summary="Iniciar (ou reaproveitar) a execução de um reparo específico")
+def iniciar_execucao_checklist(dados: ChecklistExecucaoIniciar):
+    """🆕 Cria 1 registro de 'reparo real' pra essa tag. Se já existir um
+    em andamento pra ela, reaproveita em vez de duplicar (evita 2
+    execuções abertas em paralelo pro mesmo equipamento)."""
     with get_db() as conn:
         cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM checklist_execucao_execucoes WHERE equipamento_id = %s AND status = 'em_andamento' ORDER BY id DESC LIMIT 1",
+            (dados.equipamento_id,)
+        )
+        existente = cursor.fetchone()
+        if existente:
+            return {"execucao_id": existente["id"], "reaproveitada": True}
+
+        cursor.execute(
+            """
+            INSERT INTO checklist_execucao_execucoes
+                (equipamento_id, tipo_equipamento, tipo_execucao, tecnico_matricula, tecnico_nome, iniciada_em, status)
+            VALUES (%s, %s, %s, %s, %s, %s, 'em_andamento') RETURNING id
+            """,
+            (dados.equipamento_id, dados.tipo_equipamento, dados.tipo_execucao, dados.tecnico_matricula, dados.tecnico_nome, agora_brasil().isoformat())
+        )
+        novo_id = cursor.fetchone()["id"]
+        conn.commit()
+        return {"execucao_id": novo_id, "reaproveitada": False}
+
+
+@app.post("/api/checklist-execucao/execucoes/finalizar", tags=["Checklist de Execução"], summary="Finalizar a execução de um reparo (fecha o ciclo)")
+def finalizar_execucao_checklist(dados: ChecklistExecucaoFinalizar):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE checklist_execucao_execucoes SET status = 'concluida', concluida_em = %s WHERE id = %s",
+            (agora_brasil().isoformat(), dados.execucao_id)
+        )
+        conn.commit()
+        return {"sucesso": True}
+
+
+@app.get("/api/checklist-execucao/status/{equipamento_id}", tags=["Checklist de Execução"], summary="Progresso da execução em andamento dessa tag")
+def status_checklist_execucao(equipamento_id: str):
+    """Usado pra decidir se o botão 'Concluir' pode ser liberado, e
+    também devolve o `execucao_id` pra usar nas chamadas de /marcar.
+    🆕 Agora resolve automaticamente qual é a execução 'em_andamento'
+    dessa tag, em vez de olhar etapas por tag direto (que não existe
+    mais — etapas agora são por tipo)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM checklist_execucao_execucoes WHERE equipamento_id = %s AND status = 'em_andamento' ORDER BY id DESC LIMIT 1",
+            (equipamento_id,)
+        )
+        execucao = cursor.fetchone()
+        if not execucao:
+            return {"execucao_id": None, "tipo_equipamento": None, "tipo_execucao": None, "total": 0, "marcadas": 0, "percentual": 0, "completo": False}
+
         cursor.execute(
             """
             SELECT COUNT(*) AS total,
                    COUNT(*) FILTER (WHERE m.marcado = TRUE) AS marcadas
             FROM checklist_execucao_etapas e
-            LEFT JOIN checklist_execucao_marcacoes m ON m.etapa_id = e.id
+            LEFT JOIN checklist_execucao_marcacoes m
+                   ON m.etapa_id = e.id AND m.execucao_id = %s
             WHERE e.equipamento_id = %s AND e.ativo = TRUE
             """,
-            (equipamento_id,)
+            (execucao["id"], execucao["tipo_equipamento"])
         )
         row = cursor.fetchone()
         total = row["total"] or 0
         marcadas = row["marcadas"] or 0
         percentual = round((marcadas / total) * 100, 1) if total > 0 else 0
         return {
+            "execucao_id": execucao["id"],
+            "tipo_equipamento": execucao["tipo_equipamento"],
+            "tipo_execucao": execucao["tipo_execucao"],
             "total": total,
             "marcadas": marcadas,
             "percentual": percentual,
             "completo": total > 0 and marcadas == total
         }
+
+
+@app.get("/api/checklist-execucao/folhao/{tipo_equipamento}", tags=["Checklist de Execução"], summary="Valores prontos pro Folhão se autopreencher")
+def valores_folhao_checklist_execucao(tipo_equipamento: str, execucao_id: Optional[int] = None):
+    """🆕 PONTE COM O FOLHÃO. Devolve um dicionário { folhao_campo: valor }
+    só com as etapas que têm folhao_campo preenchido e já foram
+    respondidas NAQUELA execução (reparo) específica. O front-end
+    (folhaoMolde4.js) chama isso em vez de ler <input> da tela — assim o
+    técnico nunca precisa preencher o mesmo dado duas vezes.
+
+    3 tipos de etapa:
+    - "sim_nao": vira 'OK' (marcado) ou '' (não marcado), igual ao
+      padrão que getCheckboxValue()/getRadioValue() já usam hoje.
+    - "medicao": devolve o valor bruto digitado num único campo.
+    - "medicao_multipla": pra etapas tipo "Folga Aresta — Esquerda", que
+      preenchem várias dezenas de campos de uma vez. Aqui folhao_campo
+      guarda um JSON { "1000-sup": "m4-fa-1000-es", ... } e valor guarda
+      outro JSON { "1000-sup": "0.12", ... } com a mesma chave — os dois
+      são cruzados e cada um vira uma entrada solta no resultado final."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT e.folhao_campo, e.tipo_resposta,
+                   COALESCE(m.marcado, FALSE) AS marcado, m.valor
+            FROM checklist_execucao_etapas e
+            LEFT JOIN checklist_execucao_marcacoes m
+                   ON m.etapa_id = e.id AND m.execucao_id = %s
+            WHERE e.equipamento_id = %s AND e.ativo = TRUE AND e.folhao_campo IS NOT NULL
+            """,
+            (execucao_id, tipo_equipamento)
+        )
+        linhas = cursor.fetchall()
+
+    valores = {}
+    for l in linhas:
+        if l["tipo_resposta"] == "medicao_multipla":
+            try:
+                mapa_campos = json_lib.loads(l["folhao_campo"])
+                mapa_valores = json_lib.loads(l["valor"]) if l["valor"] else {}
+            except (TypeError, ValueError):
+                continue  # JSON mal formado — pula essa etapa sem derrubar o resto
+            for chave, campo_real in mapa_campos.items():
+                valores[campo_real] = mapa_valores.get(chave, "")
+        elif l["tipo_resposta"] == "medicao":
+            valores[l["folhao_campo"]] = l["valor"] or ""
+        else:
+            valores[l["folhao_campo"]] = "OK" if l["marcado"] else ""
+    return valores
 
 
 @app.post("/api/checklist-execucao/etapas", tags=["Checklist de Execução"], summary="Cadastrar nova etapa (só ADM do checklist)")
@@ -2605,10 +2826,10 @@ def criar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaNova):
         proxima_ordem = cursor.fetchone()["proxima"]
         cursor.execute(
             """
-            INSERT INTO checklist_execucao_etapas (equipamento_id, area, texto, ordem, criado_por, criado_em)
-            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+            INSERT INTO checklist_execucao_etapas (equipamento_id, area, texto, ordem, criado_por, criado_em, folhao_campo, tipo_resposta, descricao)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
             """,
-            (dados.equipamento_id, dados.area, dados.texto, proxima_ordem, dados.operador, agora_brasil().isoformat())
+            (dados.equipamento_id, dados.area, dados.texto, proxima_ordem, dados.operador, agora_brasil().isoformat(), dados.folhao_campo, dados.tipo_resposta, dados.descricao)
         )
         novo_id = cursor.fetchone()["id"]
         conn.commit()
@@ -2653,26 +2874,33 @@ def reordenar_etapas_checklist_execucao(dados: ChecklistExecucaoReordenar):
 
 @app.post("/api/checklist-execucao/marcar", tags=["Checklist de Execução"], summary="Marcar ou desmarcar uma etapa executada")
 def marcar_etapa_checklist_execucao(dados: ChecklistExecucaoMarcar):
-    """Marca/desmarca uma etapa. Qualquer técnico logado pode marcar (não
-    só os 3 ADM — essa checagem é só pra CADASTRAR etapa). Desmarcar uma
-    etapa já feita = retrabalho: o histórico completo fica registrado em
-    checklist_execucao_historico, mesmo que o estado atual mude."""
+    """Marca/desmarca uma etapa DENTRO de uma execução (reparo) específica.
+    Qualquer técnico logado pode marcar (não só os 3 ADM — essa checagem
+    é só pra CADASTRAR etapa nova). Desmarcar uma etapa já feita =
+    retrabalho: o histórico completo fica registrado em
+    checklist_execucao_historico, mesmo que o estado atual mude.
+
+    🆕 A chave agora é (execucao_id, etapa_id), não mais só etapa_id —
+    assim a mesma etapa pode estar marcada num molde e não marcada em
+    outro, cada um na sua própria execução."""
     agora = agora_brasil().isoformat()
     acao = "marcou" if dados.marcado else "desmarcou (retrabalho)"
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO checklist_execucao_marcacoes (etapa_id, equipamento_id, marcado, colaborador, tecnico_matricula, tecnico_nome, data_hora)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (etapa_id) DO UPDATE SET
+            INSERT INTO checklist_execucao_marcacoes (etapa_id, execucao_id, equipamento_id, marcado, colaborador, tecnico_matricula, tecnico_nome, data_hora, valor, trocado)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (execucao_id, etapa_id) DO UPDATE SET
                 marcado = EXCLUDED.marcado,
                 colaborador = EXCLUDED.colaborador,
                 tecnico_matricula = EXCLUDED.tecnico_matricula,
                 tecnico_nome = EXCLUDED.tecnico_nome,
-                data_hora = EXCLUDED.data_hora
+                data_hora = EXCLUDED.data_hora,
+                valor = EXCLUDED.valor,
+                trocado = EXCLUDED.trocado
             """,
-            (dados.etapa_id, dados.equipamento_id, dados.marcado, dados.colaborador, dados.tecnico_matricula, dados.tecnico_nome, agora)
+            (dados.etapa_id, dados.execucao_id, dados.equipamento_id, dados.marcado, dados.colaborador, dados.tecnico_matricula, dados.tecnico_nome, agora, dados.valor, dados.trocado)
         )
         cursor.execute(
             """
