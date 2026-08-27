@@ -2694,6 +2694,30 @@ def listar_etapas_checklist_execucao(tipo_equipamento: str, execucao_id: Optiona
         return cursor.fetchall()
 
 
+@app.get("/api/checklist-execucao/execucoes/todas", tags=["Checklist de Execução"], summary="Listar todas as execuções de checklist em andamento")
+def listar_execucoes_checklist_em_andamento():
+    """🆕 Usado pela sub-aba 'Reparo em Andamento': antes, ela só sabia
+    de um reparo em andamento se já existisse um RASCUNHO DE FOLHÃO
+    salvo (folhoes_rascunho) — um técnico que iniciasse só o Checklist
+    de Execução (sem nunca ter aberto/salvo o Folhão ainda) ficava
+    "invisível" pro sistema: não aparecia nem em 'Iniciar Reparo' nem em
+    'Reparo em Andamento'. Esta rota devolve toda execução com
+    status='em_andamento', pra cruzar com folhoes_rascunho e formar a
+    lista completa de quem já começou o reparo de alguma forma."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, equipamento_id, tipo_equipamento, tipo_execucao,
+                   tecnico_matricula, tecnico_nome, iniciada_em
+            FROM checklist_execucao_execucoes
+            WHERE status = 'em_andamento'
+            ORDER BY id DESC
+            """
+        )
+        return cursor.fetchall()
+
+
 @app.post("/api/checklist-execucao/execucoes/iniciar", tags=["Checklist de Execução"], summary="Iniciar (ou reaproveitar) a execução de um reparo específico")
 def iniciar_execucao_checklist(dados: ChecklistExecucaoIniciar):
     """🆕 Cria 1 registro de 'reparo real' pra essa tag. Se já existir um
