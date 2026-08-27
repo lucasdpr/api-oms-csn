@@ -1303,6 +1303,12 @@ class ChecklistExecucaoEtapaEditar(BaseModel):
     id: int
     texto: str
     operador: str
+    # 🆕 Corrige a "ponte com o Folhão" de uma etapa já criada, sem
+    # precisar apagar e recadastrar (o que perderia o histórico de quem
+    # já marcou/preencheu essa etapa nas execuções em andamento).
+    # Opcionais: None = não mexe no que já estava salvo.
+    folhao_campo: Optional[str] = None
+    tipo_resposta: Optional[str] = None
 
 
 class ChecklistExecucaoEtapaExcluir(BaseModel):
@@ -2810,8 +2816,11 @@ def valores_folhao_checklist_execucao(tipo_equipamento: str, execucao_id: Option
     técnico nunca precisa preencher o mesmo dado duas vezes.
 
     3 tipos de etapa:
-    - "sim_nao": vira 'OK' (marcado) ou '' (não marcado), igual ao
-      padrão que getCheckboxValue()/getRadioValue() já usam hoje.
+    - "sim_nao": 🆕 agora usa a resposta REAL guardada em "valor" ('SIM'
+      ou 'NÃO' — ver /marcar, que passou a perguntar isso antes de só
+      assumir 'feito = SIM'). Etapas antigas, marcadas antes dessa
+      mudança, não têm valor salvo — pra essas, cai no comportamento de
+      antes ('OK' se marcado) só como compatibilidade.
     - "medicao": devolve o valor bruto digitado num único campo.
     - "medicao_multipla": pra etapas tipo "Folga Aresta — Esquerda", que
       preenchem várias dezenas de campos de uma vez. Aqui folhao_campo
@@ -2846,7 +2855,15 @@ def valores_folhao_checklist_execucao(tipo_equipamento: str, execucao_id: Option
         elif l["tipo_resposta"] == "medicao":
             valores[l["folhao_campo"]] = l["valor"] or ""
         else:
-            valores[l["folhao_campo"]] = "OK" if l["marcado"] else ""
+            # 🆕 "SIM"/"NÃO" bate direto com o value="" dos radios do
+            # Folhão (ver preencherFolhaoComChecklistExecucao no
+            # front-end) — não precisa de tradução nenhuma. Só cai no
+            # "OK" (=SIM) por padrão se a etapa foi marcada ANTES dessa
+            # mudança e não tem valor salvo ainda.
+            if l["valor"] in ("SIM", "NÃO"):
+                valores[l["folhao_campo"]] = l["valor"]
+            else:
+                valores[l["folhao_campo"]] = "OK" if l["marcado"] else ""
     return valores
 
 
@@ -2873,13 +2890,37 @@ def criar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaNova):
         return {"sucesso": True, "id": novo_id}
 
 
-@app.post("/api/checklist-execucao/etapas/editar", tags=["Checklist de Execução"], summary="Editar texto de uma etapa (só ADM do checklist)")
+@app.post("/api/checklist-execucao/etapas/editar", tags=["Checklist de Execução"], summary="Editar texto (e opcionalmente a ponte com o Folhão) de uma etapa (só ADM do checklist)")
 def editar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaEditar):
     if dados.operador.upper() not in MATRICULAS_CHECKLIST_EXECUCAO_ADMIN:
         raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem editar etapas do checklist.")
+
+    # 🆕 Se veio um novo folhao_campo pra uma etapa de medição múltipla,
+    # confere que é um JSON válido ANTES de gravar — um JSON quebrado
+    # aqui faria a ponte com o Folhão simplesmente parar de preencher
+    # tudo (igual o mapeamento errado que causou esse bug em primeiro
+    # lugar), sem erro nenhum avisando o ADM na hora.
+    if dados.folhao_campo is not None and (dados.tipo_resposta or "").strip() == "medicao_multipla":
+        try:
+            mapa = json_lib.loads(dados.folhao_campo)
+            if not isinstance(mapa, dict):
+                raise ValueError("não é um objeto JSON")
+        except (TypeError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=f"O mapeamento (folhao_campo) precisa ser um JSON válido no formato {{\"chave\": \"id_do_campo_no_folhao\"}}. Erro: {e}")
+
+    campos = ["texto = %s"]
+    valores = [dados.texto]
+    if dados.folhao_campo is not None:
+        campos.append("folhao_campo = %s")
+        valores.append(dados.folhao_campo)
+    if dados.tipo_resposta is not None:
+        campos.append("tipo_resposta = %s")
+        valores.append(dados.tipo_resposta)
+    valores.append(dados.id)
+
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE checklist_execucao_etapas SET texto = %s WHERE id = %s", (dados.texto, dados.id))
+        cursor.execute(f"UPDATE checklist_execucao_etapas SET {', '.join(campos)} WHERE id = %s", tuple(valores))
         conn.commit()
     return {"sucesso": True}
 
