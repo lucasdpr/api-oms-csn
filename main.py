@@ -30,12 +30,14 @@ def agora_brasil() -> datetime:
     return datetime.now(FUSO_BRASIL)
 
 
-# 🔐 Mesma lista de matrículas ADM usada no front-end (script.js ->
-# MATRICULAS_ADM). Repetida aqui porque o back-end não importa o
-# front-end — quem mexe numa precisa lembrar de mexer na outra. Usada
-# pra travar quem pode cadastrar/editar/reordenar/excluir etapas do
-# Checklist de Execução (só essas 3 matrículas, não qualquer ADM).
-MATRICULAS_CHECKLIST_EXECUCAO_ADMIN = ["CBK3574", "CSP1869", "CSP6632"]
+# 🔧 CORRIGIDO (matrícula duplicada dentro do próprio main.py — risco de
+# uma lista ser atualizada e a outra não): antes existia uma
+# MATRICULAS_ADM separada aqui, com as mesmas 3
+# matrículas de MATRICULAS_ADM (definida mais abaixo). Confirmado que
+# as 3 matrículas ADM devem ter acesso a tudo, então os 4 pontos que
+# usavam a lista separada (cadastrar/editar/excluir/reordenar etapas do
+# Checklist de Execução) agora usam MATRICULAS_ADM direto — uma lista
+# só, uma fonte de verdade só.
 
 
 tags_metadata = [
@@ -2869,7 +2871,7 @@ def valores_folhao_checklist_execucao(tipo_equipamento: str, execucao_id: Option
 
 @app.post("/api/checklist-execucao/etapas", tags=["Checklist de Execução"], summary="Cadastrar nova etapa (só ADM do checklist)")
 def criar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaNova):
-    if dados.operador.upper() not in MATRICULAS_CHECKLIST_EXECUCAO_ADMIN:
+    if dados.operador.upper() not in MATRICULAS_ADM:
         raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem cadastrar etapas do checklist.")
     with get_db() as conn:
         cursor = conn.cursor()
@@ -2892,7 +2894,7 @@ def criar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaNova):
 
 @app.post("/api/checklist-execucao/etapas/editar", tags=["Checklist de Execução"], summary="Editar texto (e opcionalmente a ponte com o Folhão) de uma etapa (só ADM do checklist)")
 def editar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaEditar):
-    if dados.operador.upper() not in MATRICULAS_CHECKLIST_EXECUCAO_ADMIN:
+    if dados.operador.upper() not in MATRICULAS_ADM:
         raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem editar etapas do checklist.")
 
     # 🆕 Se veio um novo folhao_campo pra uma etapa de medição múltipla,
@@ -2927,7 +2929,7 @@ def editar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaEditar):
 
 @app.post("/api/checklist-execucao/etapas/excluir", tags=["Checklist de Execução"], summary="Excluir (desativar) uma etapa (só ADM do checklist)")
 def excluir_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaExcluir):
-    if dados.operador.upper() not in MATRICULAS_CHECKLIST_EXECUCAO_ADMIN:
+    if dados.operador.upper() not in MATRICULAS_ADM:
         raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem excluir etapas do checklist.")
     with get_db() as conn:
         cursor = conn.cursor()
@@ -2940,7 +2942,7 @@ def excluir_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaExcluir):
 
 @app.post("/api/checklist-execucao/etapas/reordenar", tags=["Checklist de Execução"], summary="Reordenar etapas dentro de uma seção (só ADM do checklist)")
 def reordenar_etapas_checklist_execucao(dados: ChecklistExecucaoReordenar):
-    if dados.operador.upper() not in MATRICULAS_CHECKLIST_EXECUCAO_ADMIN:
+    if dados.operador.upper() not in MATRICULAS_ADM:
         raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem reordenar etapas do checklist.")
     with get_db() as conn:
         cursor = conn.cursor()
