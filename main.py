@@ -1311,6 +1311,10 @@ class ChecklistExecucaoEtapaEditar(BaseModel):
     # Opcionais: None = não mexe no que já estava salvo.
     folhao_campo: Optional[str] = None
     tipo_resposta: Optional[str] = None
+    # 🆕 Move a etapa de bloco/seção (ex: "mecanica" -> "chegada", pro
+    # Molde MCC4 que passou a usar Chegada/Manutenção/Saída em vez das
+    # seções genéricas). Mesma lógica: None = não mexe na área atual.
+    area: Optional[str] = None
 
 
 class ChecklistExecucaoEtapaExcluir(BaseModel):
@@ -2918,6 +2922,9 @@ def editar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaEditar):
     if dados.tipo_resposta is not None:
         campos.append("tipo_resposta = %s")
         valores.append(dados.tipo_resposta)
+    if dados.area is not None:
+        campos.append("area = %s")
+        valores.append(dados.area)
     valores.append(dados.id)
 
     with get_db() as conn:
