@@ -1432,6 +1432,10 @@ class ChecklistExecucaoAtividadeExtra(BaseModel):
     operador_nome: str
 
 
+class ChecklistExecucaoAtividadeExtraExcluir(BaseModel):
+    id: int  # id da linha em checklist_execucao_atividades_extra (não o da oficina_atividades)
+
+
 class OficinaAtividadeEditar(BaseModel):
     id: int
     equipamento_id: Optional[str] = None
@@ -3215,6 +3219,31 @@ def listar_atividades_extra_checklist_execucao(execucao_id: int):
             (execucao_id,)
         )
         return cursor.fetchall()
+
+
+@app.post("/api/checklist-execucao/atividade-extra/excluir", tags=["Checklist de Execução"], summary="Excluir uma Atividade Extra (cancela também a atividade real na área)")
+def excluir_atividade_extra_checklist_execucao(dados: ChecklistExecucaoAtividadeExtraExcluir):
+    """Exclui a linha aqui E a atividade de verdade que ela criou no
+    quadro da área (oficina_atividades) — as duas nascem juntas
+    (ver registrar_atividade_extra_checklist_execucao), então excluir
+    só uma e deixar a outra pra trás confundiria: a área continuaria
+    vendo uma atividade pendente que, pro Checklist de Execução, nunca
+    existiu."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT oficina_atividade_id FROM checklist_execucao_atividades_extra WHERE id = %s",
+            (dados.id,)
+        )
+        linha = cursor.fetchone()
+        if not linha:
+            raise HTTPException(status_code=404, detail="Atividade extra não encontrada.")
+
+        cursor.execute("DELETE FROM checklist_execucao_atividades_extra WHERE id = %s", (dados.id,))
+        if linha["oficina_atividade_id"]:
+            cursor.execute("DELETE FROM oficina_atividades WHERE id = %s", (linha["oficina_atividade_id"],))
+        conn.commit()
+    return {"sucesso": True}
 
 
 @app.get("/api/checklist-execucao/historico/{equipamento_id}", tags=["Checklist de Execução"], summary="Histórico completo (inclui retrabalhos)")
