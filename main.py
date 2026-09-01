@@ -918,6 +918,41 @@ def init_db():
             ADD COLUMN IF NOT EXISTS especialidade TEXT NOT NULL DEFAULT 'mecanica'
         ''')
 
+        # 🆕 AVISO ENTRE ÁREAS — controla quais avisos ("Elétrica, se
+        # prepara que a Mecânica tá terminando") já foram disparados,
+        # pra não mandar push de novo a cada etapa marcada. 1 linha por
+        # (execução, aba, área avisada) — UNIQUE trava duplicata mesmo
+        # que dois técnicos marquem ao mesmo tempo.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS checklist_execucao_avisos_area (
+                id SERIAL PRIMARY KEY,
+                execucao_id INTEGER NOT NULL REFERENCES checklist_execucao_execucoes(id) ON DELETE CASCADE,
+                aba TEXT NOT NULL,
+                area_avisada TEXT NOT NULL,
+                criado_em TEXT,
+                UNIQUE(execucao_id, aba, area_avisada)
+            )
+        ''')
+
+        # 🆕 ATIVIDADE EXTRA — registro de algo que aconteceu fora do
+        # checklist padrão daquele tipo de equipamento (ex: precisou
+        # envolver Caldeiraria ou Usinagem numa reparo que normalmente
+        # não passa por elas). Fica gravado ligado à execução (pra
+        # constar no histórico do reparo) e dispara push pra área
+        # escolhida na hora do registro.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS checklist_execucao_atividades_extra (
+                id SERIAL PRIMARY KEY,
+                execucao_id INTEGER REFERENCES checklist_execucao_execucoes(id) ON DELETE CASCADE,
+                equipamento_id TEXT NOT NULL,
+                area TEXT NOT NULL,
+                descricao TEXT NOT NULL,
+                operador_matricula TEXT,
+                operador_nome TEXT,
+                criado_em TEXT
+            )
+        ''')
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS laudos (
                 id SERIAL PRIMARY KEY,
@@ -1374,6 +1409,17 @@ class ChecklistExecucaoMarcar(BaseModel):
     trocado: Optional[bool] = None
 
 
+class ChecklistExecucaoAtividadeExtra(BaseModel):
+    # 🆕 Registro de algo fora do checklist padrão (ex: precisou
+    # envolver Caldeiraria ou Usinagem num reparo de Molde).
+    execucao_id: int
+    equipamento_id: str
+    area: str  # chave da área (mecanica/eletrica/hidraulica/caldeiraria/usinagem/tubulacao/jato)
+    descricao: str
+    operador_matricula: Optional[str] = None
+    operador_nome: str
+
+
 class OficinaAtividadeEditar(BaseModel):
     id: int
     equipamento_id: Optional[str] = None
@@ -1822,6 +1868,20 @@ def get_colaboradores():
 # importar_efetivo_oficina.py). Mesmo padrão já usado no front-end para
 # MATRICULAS_TESTE_FOLHOES, em script.js.
 MATRICULAS_ADM = ("CBK3574", "CSP1869", "CSP6632")
+
+# 🆕 Nome legível de cada área — usado nas notificações push (aviso
+# entre áreas e atividade extra), pra não mandar a chave crua
+# ("eletrica") na mensagem. Mesmas chaves de CHECKLIST_EXECUCAO_SECOES
+# no front-end (dados.js) — mantenha as duas listas em sincronia.
+NOME_AREA_PUSH = {
+    "mecanica": "Mecânica",
+    "eletrica": "Elétrica",
+    "hidraulica": "Hidráulica",
+    "caldeiraria": "Caldeiraria",
+    "usinagem": "Usinagem",
+    "tubulacao": "Tubulação",
+    "jato": "Jato/Pintura",
+}
 
 
 def _buscar_area_colaborador(cursor, matricula):
@@ -3022,8 +3082,115 @@ def marcar_etapa_checklist_execucao(dados: ChecklistExecucaoMarcar):
             """,
             (dados.etapa_id, dados.equipamento_id, acao, dados.colaborador, dados.tecnico_matricula, dados.tecnico_nome, agora)
         )
+
+        # 🆕 AVISO ENTRE ÁREAS: quando a Mecânica está terminando uma
+        # fase (Chegada/Manutenção/Saída) e sobra só a ÚLTIMA etapa
+        # dela pendente, avisa a Elétrica/Hidráulica que a peça está
+        # "quase liberada" pra elas entrarem — dá tempo de se
+        # organizarem ANTES da Mecânica terminar de vez, não só depois.
+        #
+        # Só se aplica a tipos de equipamento que separam etapa
+        # (chegada/manutencao/saida) de especialidade — hoje só o Molde
+        # MCC4. Nos outros tipos "area" já É a especialidade, então
+        # essa lógica não faz sentido (nunca tem "outra especialidade
+        # na mesma aba" pra avisar).
+        if dados.marcado:
+            cursor.execute("SELECT area, especialidade FROM checklist_execucao_etapas WHERE id = %s", (dados.etapa_id,))
+            etapa_marcada = cursor.fetchone()
+            if etapa_marcada and (etapa_marcada["especialidade"] or "mecanica") == "mecanica":
+                cursor.execute("SELECT tipo_equipamento FROM checklist_execucao_execucoes WHERE id = %s", (dados.execucao_id,))
+                execucao_row = cursor.fetchone()
+                tipo_equipamento = execucao_row["tipo_equipamento"] if execucao_row else None
+                if tipo_equipamento == "molde-mcc4":
+                    aba = etapa_marcada["area"]
+                    cursor.execute(
+                        """
+                        SELECT COALESCE(m.marcado, FALSE) AS marcado
+                        FROM checklist_execucao_etapas e
+                        LEFT JOIN checklist_execucao_marcacoes m
+                               ON m.etapa_id = e.id AND m.execucao_id = %s
+                        WHERE e.equipamento_id = %s AND e.area = %s AND e.especialidade = 'mecanica' AND e.ativo = TRUE
+                        """,
+                        (dados.execucao_id, tipo_equipamento, aba)
+                    )
+                    pendentes_mecanica = sum(1 for r in cursor.fetchall() if not r["marcado"])
+                    if pendentes_mecanica == 1:
+                        cursor.execute(
+                            """
+                            SELECT DISTINCT e.especialidade
+                            FROM checklist_execucao_etapas e
+                            LEFT JOIN checklist_execucao_marcacoes m
+                                   ON m.etapa_id = e.id AND m.execucao_id = %s
+                            WHERE e.equipamento_id = %s AND e.area = %s AND e.especialidade != 'mecanica' AND e.ativo = TRUE
+                              AND COALESCE(m.marcado, FALSE) = FALSE
+                            """,
+                            (dados.execucao_id, tipo_equipamento, aba)
+                        )
+                        for linha in cursor.fetchall():
+                            especialidade_pendente = linha["especialidade"]
+                            cursor.execute(
+                                """
+                                INSERT INTO checklist_execucao_avisos_area (execucao_id, aba, area_avisada, criado_em)
+                                VALUES (%s, %s, %s, %s)
+                                ON CONFLICT (execucao_id, aba, area_avisada) DO NOTHING
+                                RETURNING id
+                                """,
+                                (dados.execucao_id, aba, especialidade_pendente, agora)
+                            )
+                            if cursor.fetchone():  # só dispara push se inseriu de fato (nunca avisado antes)
+                                nome_aba = NOME_AREA_PUSH.get(aba, aba)
+                                nome_especialidade = NOME_AREA_PUSH.get(especialidade_pendente, especialidade_pendente)
+                                enviar_push_para_area(
+                                    titulo=f"Molde {dados.equipamento_id} quase liberado",
+                                    corpo=f"Mecânica está terminando \"{nome_aba}\" — {nome_especialidade} pode se preparar pra entrar.",
+                                    area=especialidade_pendente,
+                                    url="/"
+                                )
+
         conn.commit()
     return {"sucesso": True}
+
+
+@app.post("/api/checklist-execucao/atividade-extra", tags=["Checklist de Execução"], summary="Registrar atividade fora do checklist padrão (ex: precisou de Caldeiraria/Usinagem)")
+def registrar_atividade_extra_checklist_execucao(dados: ChecklistExecucaoAtividadeExtra):
+    agora = agora_brasil().isoformat()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO checklist_execucao_atividades_extra
+                (execucao_id, equipamento_id, area, descricao, operador_matricula, operador_nome, criado_em)
+            VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
+            """,
+            (dados.execucao_id, dados.equipamento_id, dados.area, dados.descricao, dados.operador_matricula, dados.operador_nome, agora)
+        )
+        novo_id = cursor.fetchone()["id"]
+        conn.commit()
+
+    nome_area = NOME_AREA_PUSH.get(dados.area, dados.area)
+    enviar_push_para_area(
+        titulo=f"Atividade extra — {dados.equipamento_id}",
+        corpo=f"{nome_area} precisa entrar: {dados.descricao}",
+        area=dados.area,
+        url="/"
+    )
+    return {"sucesso": True, "id": novo_id}
+
+
+@app.get("/api/checklist-execucao/atividades-extra/{execucao_id}", tags=["Checklist de Execução"], summary="Listar atividades extra registradas numa execução")
+def listar_atividades_extra_checklist_execucao(execucao_id: int):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, area, descricao, operador_matricula, operador_nome, criado_em
+            FROM checklist_execucao_atividades_extra
+            WHERE execucao_id = %s
+            ORDER BY id DESC
+            """,
+            (execucao_id,)
+        )
+        return cursor.fetchall()
 
 
 @app.get("/api/checklist-execucao/historico/{equipamento_id}", tags=["Checklist de Execução"], summary="Histórico completo (inclui retrabalhos)")
