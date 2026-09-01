@@ -589,6 +589,28 @@ def init_db():
             ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS data_inicio TEXT
         ''')
 
+        # 🆕 JUSTIFICATIVA — pra quando a área não pode simplesmente
+        # "passar por cima" de uma atividade: precisa dizer POR QUE não
+        # iniciou (status "Recusado", ex: pediram e não forneceram o
+        # material) ou por que travou depois de já ter começado (status
+        # "Aguardando", ex: aguardando material chegar). Quem pediu a
+        # atividade (o solicitante_matricula) é avisado por push com
+        # esse motivo — ver enviar_push_para_matricula.
+        cursor.execute('''
+            ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS motivo_status TEXT
+        ''')
+        # 🆕 Quem PEDIU essa atividade (matrícula) — separado de
+        # "criado_por" (que hoje guarda o NOME de exibição, não dá pra
+        # mandar push só com isso). Preenchido automaticamente quando a
+        # atividade nasce de um "Registrar Atividade Extra" no
+        # Checklist de Execução (ver registrar_atividade_extra_
+        # checklist_execucao); atividade criada direto no quadro da
+        # área fica sem solicitante (não tem "quem pediu" — quem criou
+        # e quem executa são a mesma pessoa/área).
+        cursor.execute('''
+            ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS solicitante_matricula TEXT
+        ''')
+
         # 📝 Anotações livres por área (materiais/procedimento — provisório).
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS oficina_notas_area (
@@ -1065,13 +1087,50 @@ def limpar_texto_para_notificacao(texto: str) -> str:
     return limpo
 
 
+def _disparar_push_para_inscricoes(inscricoes, titulo: str, corpo: str, url: str):
+    """Núcleo comum de envio — usado tanto por área (enviar_push_para_area)
+    quanto por matrícula específica (enviar_push_para_matricula). Fica
+    num lugar só pra não duplicar a limpeza de endpoint morto."""
+    if not inscricoes:
+        return
+    corpo = limpar_texto_para_notificacao(corpo)
+    titulo = limpar_texto_para_notificacao(titulo)
+    payload = json_lib.dumps({"titulo": titulo, "corpo": corpo, "url": url})
+
+    endpoints_mortos = []
+    for inscricao in inscricoes:
+        try:
+            webpush(
+                subscription_info={
+                    "endpoint": inscricao["endpoint"],
+                    "keys": {
+                        "p256dh": inscricao["p256dh"],
+                        "auth": inscricao["auth"]
+                    }
+                },
+                data=payload,
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims={"sub": VAPID_EMAIL}
+            )
+        except WebPushException as e:
+            if e.response is not None and e.response.status_code in (404, 410):
+                endpoints_mortos.append(inscricao["endpoint"])
+            else:
+                print(f"⚠️ Erro ao enviar push: {e}")
+
+    if endpoints_mortos:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM push_subscriptions WHERE endpoint = ANY(%s)",
+                (endpoints_mortos,)
+            )
+            conn.commit()
+
+
 def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str = "/"):
     if not PUSH_HABILITADO:
         return
-
-    corpo = limpar_texto_para_notificacao(corpo)
-    titulo = limpar_texto_para_notificacao(titulo)
-
     try:
         with get_db() as conn:
             cursor = conn.cursor()
@@ -1095,40 +1154,29 @@ def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str
                     WHERE c.matricula = ANY(%s) OR c.area = %s
                 """, (list(MATRICULAS_ADM), area))
             inscricoes = cursor.fetchall()
-
-        payload = json_lib.dumps({"titulo": titulo, "corpo": corpo, "url": url})
-
-        endpoints_mortos = []
-        for inscricao in inscricoes:
-            try:
-                webpush(
-                    subscription_info={
-                        "endpoint": inscricao["endpoint"],
-                        "keys": {
-                            "p256dh": inscricao["p256dh"],
-                            "auth": inscricao["auth"]
-                        }
-                    },
-                    data=payload,
-                    vapid_private_key=VAPID_PRIVATE_KEY,
-                    vapid_claims={"sub": VAPID_EMAIL}
-                )
-            except WebPushException as e:
-                if e.response is not None and e.response.status_code in (404, 410):
-                    endpoints_mortos.append(inscricao["endpoint"])
-                else:
-                    print(f"⚠️ Erro ao enviar push: {e}")
-
-        if endpoints_mortos:
-            with get_db() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "DELETE FROM push_subscriptions WHERE endpoint = ANY(%s)",
-                    (endpoints_mortos,)
-                )
-                conn.commit()
+        _disparar_push_para_inscricoes(inscricoes, titulo, corpo, url)
     except Exception as e:
         print(f"⚠️ Falha geral ao processar envio de push: {e}")
+
+
+# 🆕 Avisa UMA pessoa específica (não a área toda) — usado quando a
+# área Recusa ou coloca "Aguardando" numa atividade: quem PEDIU (o
+# técnico do Checklist de Execução, via solicitante_matricula) precisa
+# saber o motivo, não a área inteira de novo.
+def enviar_push_para_matricula(matricula: str, titulo: str, corpo: str, url: str = "/"):
+    if not PUSH_HABILITADO or not matricula:
+        return
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE matricula = %s",
+                (matricula,)
+            )
+            inscricoes = cursor.fetchall()
+        _disparar_push_para_inscricoes(inscricoes, titulo, corpo, url)
+    except Exception as e:
+        print(f"⚠️ Falha geral ao processar envio de push (matrícula): {e}")
 
 
 class PecaUpdate(BaseModel):
@@ -1287,11 +1335,20 @@ class OficinaAtividade(BaseModel):
     foto_base64: Optional[str] = None  # data URL (ex: "data:image/jpeg;base64,...")
     prazo: Optional[str] = None        # data no formato "YYYY-MM-DD", opcional
     data_inicio: Optional[str] = None  # data no formato "YYYY-MM-DD", opcional — quando futura, a atividade fica "programada"
+    # 🆕 Matrícula de quem PEDIU essa atividade (não quem vai executar).
+    # Só vem preenchido quando a atividade nasce de um "Registrar
+    # Atividade Extra" no Checklist de Execução — é pra ELE que a área
+    # avisa se Recusar ou colocar "Aguardando" com motivo.
+    solicitante_matricula: Optional[str] = None
 
 
 class OficinaStatus(BaseModel):
     id: int
-    status: str  # "Pendente" | "Em Andamento" | "Concluído"
+    status: str  # "Pendente" | "Em Andamento" | "Concluído" | "Aguardando" | "Recusado"
+    # 🆕 Obrigatório (no front) quando status vira "Aguardando" ou
+    # "Recusado" — não dá pra só "passar por cima" de uma atividade
+    # sem dizer por que não iniciou ou por que travou.
+    motivo: Optional[str] = None
 
 
 class OficinaExcluir(BaseModel):
@@ -2432,12 +2489,12 @@ def criar_atividade_oficina(dados: OficinaAtividade):
         cursor.execute(
             """
             INSERT INTO oficina_atividades
-                (area, equipamento_id, descricao, responsavel, prioridade, status, criado_por, criado_em, foto_base64, prazo, data_inicio)
-            VALUES (%s, %s, %s, %s, %s, 'Pendente', %s, %s, %s, %s, %s)
+                (area, equipamento_id, descricao, responsavel, prioridade, status, criado_por, criado_em, foto_base64, prazo, data_inicio, solicitante_matricula)
+            VALUES (%s, %s, %s, %s, %s, 'Pendente', %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (dados.area, dados.equipamento_id, dados.descricao, dados.responsavel,
-             dados.prioridade or "Normal", dados.operador, agora, dados.foto_base64, dados.prazo, dados.data_inicio)
+             dados.prioridade or "Normal", dados.operador, agora, dados.foto_base64, dados.prazo, dados.data_inicio, dados.solicitante_matricula)
         )
         atividade_id = cursor.fetchone()["id"]
         conn.commit()
@@ -2468,8 +2525,21 @@ def criar_atividade_oficina(dados: OficinaAtividade):
 
 @app.post("/api/oficina/atividade/status", tags=["Oficina"], summary="Mudar status de uma atividade da Oficina")
 def mudar_status_atividade_oficina(dados: OficinaStatus):
+    # 🆕 "Recusado" e "Aguardando" exigem motivo — não dá pra só
+    # "passar por cima" de uma atividade sem justificar por que não
+    # iniciou (Recusado) ou por que travou depois de já ter começado
+    # (Aguardando, ex: aguardando material chegar).
+    if dados.status in ("Recusado", "Aguardando") and not (dados.motivo or "").strip():
+        raise HTTPException(status_code=400, detail=f"Status \"{dados.status}\" precisa de um motivo.")
+
     agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     concluido_em = agora if dados.status == "Concluído" else None
+    # Motivo só faz sentido — e só fica visível — enquanto o status for
+    # Recusado/Aguardando. Retomando (volta pra Em Andamento) ou
+    # concluindo, o motivo antigo é limpo — não fica um aviso velho
+    # grudado numa atividade que já resolveu o problema.
+    motivo_status = dados.motivo.strip() if dados.status in ("Recusado", "Aguardando") else None
+
     with get_db() as conn:
         cursor = conn.cursor()
         # 🆕 Se a atividade voltou a ficar aberta (reaberta depois de
@@ -2477,14 +2547,31 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
         # ficar atrasada de novo, precisa poder notificar de novo.
         resetar_notificacao = dados.status != "Concluído"
         cursor.execute(
-            "UPDATE oficina_atividades SET status = %s, concluido_em = %s"
+            "UPDATE oficina_atividades SET status = %s, concluido_em = %s, motivo_status = %s"
             + (", notificado_atraso = FALSE" if resetar_notificacao else "")
-            + " WHERE id = %s",
-            (dados.status, concluido_em, dados.id)
+            + " WHERE id = %s"
+            + " RETURNING equipamento_id, descricao, area, solicitante_matricula",
+            (dados.status, concluido_em, motivo_status, dados.id)
         )
-        if cursor.rowcount == 0:
+        linha = cursor.fetchone()
+        if not linha:
             raise HTTPException(status_code=404, detail="Atividade não encontrada.")
         conn.commit()
+
+    # 📲 Avisa especificamente QUEM PEDIU (não a área toda de novo) —
+    # só faz sentido pra atividade que veio de um "Registrar Atividade
+    # Extra" no Checklist de Execução (tem solicitante_matricula). Uma
+    # atividade criada direto no quadro da área não tem "quem pediu"
+    # separado de quem executa.
+    if dados.status in ("Recusado", "Aguardando") and linha["solicitante_matricula"]:
+        tag = linha["equipamento_id"] or ""
+        verbo = "recusou" if dados.status == "Recusado" else "colocou em espera"
+        enviar_push_para_matricula(
+            matricula=linha["solicitante_matricula"],
+            titulo=f"{AREA_OFICINA_NOMES.get(linha['area'], linha['area'])} {verbo} sua atividade — {tag}",
+            corpo=f"Motivo: {motivo_status}",
+            url="/"
+        )
     return {"sucesso": True}
 
 
@@ -2537,6 +2624,17 @@ def verificar_atrasos_oficina():
 def excluir_atividade_oficina(dados: OficinaExcluir):
     with get_db() as conn:
         cursor = conn.cursor()
+        # 🐛 CORRIGIDO ("excluí na área e continuou aparecendo no
+        # Checklist de Execução"): a exclusão só tinha sido resolvida
+        # no sentido Checklist -> Área (ver
+        # excluir_atividade_extra_checklist_execucao). Excluindo por
+        # aqui (direto no quadro da área, o caminho mais comum de
+        # quem trabalha na área) o registro em
+        # checklist_execucao_atividades_extra ficava órfão pra sempre
+        # — o LEFT JOIN só perdia o status, o registro em si nunca
+        # sumia de lá. Agora as duas pontas se apagam juntas,
+        # não importa por qual lado a exclusão começa.
+        cursor.execute("DELETE FROM checklist_execucao_atividades_extra WHERE oficina_atividade_id = %s", (dados.id,))
         cursor.execute("DELETE FROM oficina_atividades WHERE id = %s", (dados.id,))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Atividade não encontrada.")
@@ -3179,6 +3277,7 @@ def registrar_atividade_extra_checklist_execucao(dados: ChecklistExecucaoAtivida
         equipamento_id=dados.equipamento_id,
         descricao=f"[Checklist de Execução] {dados.descricao}",
         operador=dados.operador_nome,
+        solicitante_matricula=dados.operador_matricula,
     ))
     oficina_atividade_id = atividade_oficina["id"]
 
@@ -3210,7 +3309,7 @@ def listar_atividades_extra_checklist_execucao(execucao_id: int):
         cursor.execute(
             """
             SELECT ce.id, ce.area, ce.descricao, ce.operador_matricula, ce.operador_nome, ce.criado_em,
-                   oa.status AS status_atividade, oa.concluido_em AS concluido_em
+                   oa.status AS status_atividade, oa.concluido_em AS concluido_em, oa.motivo_status AS motivo_status
             FROM checklist_execucao_atividades_extra ce
             LEFT JOIN oficina_atividades oa ON oa.id = ce.oficina_atividade_id
             WHERE ce.execucao_id = %s
