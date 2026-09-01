@@ -952,6 +952,18 @@ def init_db():
                 criado_em TEXT
             )
         ''')
+        # 🐛 CORRIGIDO ("registrei pra Caldeiraria e não chegou nada lá,
+        # nem aparece de volta como concluído"): o registro de Atividade
+        # Extra criava só uma linha "informativa" aqui, sem nunca virar
+        # uma atividade DE VERDADE no quadro da área (oficina_atividades
+        # — a mesma tela com Pendente/Em Andamento/Concluído que cada
+        # área já usa). Essa coluna liga as duas: quando a área concluir
+        # a atividade no quadro dela, o Checklist de Execução consegue
+        # mostrar "Concluído" só fazendo join com oficina_atividades.
+        cursor.execute('''
+            ALTER TABLE checklist_execucao_atividades_extra
+            ADD COLUMN IF NOT EXISTS oficina_atividade_id INTEGER REFERENCES oficina_atividades(id) ON DELETE SET NULL
+        ''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS laudos (
@@ -3150,40 +3162,55 @@ def marcar_etapa_checklist_execucao(dados: ChecklistExecucaoMarcar):
 
 @app.post("/api/checklist-execucao/atividade-extra", tags=["Checklist de Execução"], summary="Registrar atividade fora do checklist padrão (ex: precisou de Caldeiraria/Usinagem)")
 def registrar_atividade_extra_checklist_execucao(dados: ChecklistExecucaoAtividadeExtra):
+    # 🐛 CORRIGIDO ("registrei pra Caldeiraria e não chegou nada lá"):
+    # antes isso só gravava uma linha informativa aqui dentro — nunca
+    # virava uma atividade de verdade no quadro da área (as mesmas
+    # "Atividades da Oficina" com Pendente/Em Andamento/Concluído que
+    # cada área já usa). Agora chama criar_atividade_oficina() de
+    # verdade (mesma função do botão "+ Nova Atividade" de cada área) —
+    # reaproveita o push que ela já dispara, então NÃO manda um segundo
+    # aviso separado aqui.
+    atividade_oficina = criar_atividade_oficina(OficinaAtividade(
+        area=dados.area,
+        equipamento_id=dados.equipamento_id,
+        descricao=f"[Checklist de Execução] {dados.descricao}",
+        operador=dados.operador_nome,
+    ))
+    oficina_atividade_id = atividade_oficina["id"]
+
     agora = agora_brasil().isoformat()
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
             INSERT INTO checklist_execucao_atividades_extra
-                (execucao_id, equipamento_id, area, descricao, operador_matricula, operador_nome, criado_em)
-            VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
+                (execucao_id, equipamento_id, area, descricao, operador_matricula, operador_nome, criado_em, oficina_atividade_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
             """,
-            (dados.execucao_id, dados.equipamento_id, dados.area, dados.descricao, dados.operador_matricula, dados.operador_nome, agora)
+            (dados.execucao_id, dados.equipamento_id, dados.area, dados.descricao, dados.operador_matricula, dados.operador_nome, agora, oficina_atividade_id)
         )
         novo_id = cursor.fetchone()["id"]
         conn.commit()
 
-    nome_area = NOME_AREA_PUSH.get(dados.area, dados.area)
-    enviar_push_para_area(
-        titulo=f"Atividade extra — {dados.equipamento_id}",
-        corpo=f"{nome_area} precisa entrar: {dados.descricao}",
-        area=dados.area,
-        url="/"
-    )
-    return {"sucesso": True, "id": novo_id}
+    return {"sucesso": True, "id": novo_id, "oficina_atividade_id": oficina_atividade_id}
 
 
 @app.get("/api/checklist-execucao/atividades-extra/{execucao_id}", tags=["Checklist de Execução"], summary="Listar atividades extra registradas numa execução")
 def listar_atividades_extra_checklist_execucao(execucao_id: int):
     with get_db() as conn:
         cursor = conn.cursor()
+        # 🆕 JOIN com oficina_atividades pra trazer o status ATUAL (o
+        # que a área marcou no quadro dela: Pendente/Em Andamento/
+        # Concluído) — sem isso o Checklist de Execução nunca sabia se
+        # a área já tinha resolvido ou não.
         cursor.execute(
             """
-            SELECT id, area, descricao, operador_matricula, operador_nome, criado_em
-            FROM checklist_execucao_atividades_extra
-            WHERE execucao_id = %s
-            ORDER BY id DESC
+            SELECT ce.id, ce.area, ce.descricao, ce.operador_matricula, ce.operador_nome, ce.criado_em,
+                   oa.status AS status_atividade, oa.concluido_em AS concluido_em
+            FROM checklist_execucao_atividades_extra ce
+            LEFT JOIN oficina_atividades oa ON oa.id = ce.oficina_atividade_id
+            WHERE ce.execucao_id = %s
+            ORDER BY ce.id DESC
             """,
             (execucao_id,)
         )
