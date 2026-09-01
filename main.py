@@ -611,6 +611,31 @@ def init_db():
             ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS solicitante_matricula TEXT
         ''')
 
+        # 🆕 CONVERSA DA ATIVIDADE — thread de mensagens de mão dupla
+        # numa atividade específica. Sem isso, o único jeito de "avisar"
+        # alguma coisa era recusar/pausar (que exige motivo, mas é uma
+        # via só: área -> solicitante). Casos reais que isso resolve:
+        #   - Solicitante pede algo urgente: "preciso disso pra hoje"
+        #     (mensagem já na criação, ou logo depois).
+        #   - Área pausou por falta de material; solicitante responde
+        #     "levei o material agora" — sem precisar reabrir/recriar
+        #     nada, só conversar na mesma atividade.
+        #   - Área pergunta algo antes de começar ("é essa tag mesmo?").
+        #   - Área conclui e deixa uma observação final pro solicitante.
+        # Cada mensagem nova dispara push pro OUTRO lado (quem mandou
+        # não recebe aviso da própria mensagem) — ver
+        # criar_mensagem_atividade_oficina.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS oficina_atividade_mensagens (
+                id SERIAL PRIMARY KEY,
+                atividade_id INTEGER NOT NULL REFERENCES oficina_atividades(id) ON DELETE CASCADE,
+                autor_matricula TEXT,
+                autor_nome TEXT,
+                mensagem TEXT NOT NULL,
+                criado_em TEXT
+            )
+        ''')
+
         # 📝 Anotações livres por área (materiais/procedimento — provisório).
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS oficina_notas_area (
@@ -1353,6 +1378,13 @@ class OficinaStatus(BaseModel):
 
 class OficinaExcluir(BaseModel):
     id: int
+
+
+class OficinaAtividadeMensagem(BaseModel):
+    atividade_id: int
+    autor_matricula: Optional[str] = None
+    autor_nome: str
+    mensagem: str
 
 
 class OficinaNota(BaseModel):
@@ -2534,11 +2566,13 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
 
     agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     concluido_em = agora if dados.status == "Concluído" else None
-    # Motivo só faz sentido — e só fica visível — enquanto o status for
-    # Recusado/Aguardando. Retomando (volta pra Em Andamento) ou
-    # concluindo, o motivo antigo é limpo — não fica um aviso velho
-    # grudado numa atividade que já resolveu o problema.
-    motivo_status = dados.motivo.strip() if dados.status in ("Recusado", "Aguardando") else None
+    # 🔧 CORRIGIDO ("nem chegou notificação de que iniciou, nem o
+    # motivo da recusa"): antes só guardava (e só avisava) o motivo pra
+    # Recusado/Aguardando. Motivo/observação agora vale pra QUALQUER
+    # status — inclusive uma nota ao Concluir ("trocado o parafuso X")
+    # — se veio alguma coisa, guarda; senão fica vazio (não força
+    # limpeza em transições que não vieram acompanhadas de nota).
+    motivo_status = dados.motivo.strip() if (dados.motivo or "").strip() else None
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -2558,18 +2592,30 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
             raise HTTPException(status_code=404, detail="Atividade não encontrada.")
         conn.commit()
 
-    # 📲 Avisa especificamente QUEM PEDIU (não a área toda de novo) —
-    # só faz sentido pra atividade que veio de um "Registrar Atividade
-    # Extra" no Checklist de Execução (tem solicitante_matricula). Uma
+    # 🔧 CORRIGIDO ("nem chegou notificação de que ele iniciou a
+    # atividade, e nem que recusou e o motivo"): antes só avisava em
+    # Recusado/Aguardando — quem pediu ficava sem saber que o serviço
+    # tinha começado ou terminado. Agora TODA mudança de status
+    # (Iniciar, Concluir, Recusar, Aguardar) avisa quem pediu — só faz
+    # sentido pra atividade que veio de um "Registrar Atividade Extra"
+    # no Checklist de Execução (tem solicitante_matricula). Uma
     # atividade criada direto no quadro da área não tem "quem pediu"
-    # separado de quem executa.
-    if dados.status in ("Recusado", "Aguardando") and linha["solicitante_matricula"]:
+    # separado de quem executa, então não notifica ninguém aqui.
+    if linha["solicitante_matricula"]:
         tag = linha["equipamento_id"] or ""
-        verbo = "recusou" if dados.status == "Recusado" else "colocou em espera"
+        nome_area = AREA_OFICINA_NOMES.get(linha["area"], linha["area"])
+        VERBOS_STATUS = {
+            "Em Andamento": "iniciou",
+            "Concluído": "concluiu",
+            "Recusado": "recusou",
+            "Aguardando": "colocou em espera",
+            "Pendente": "reabriu",
+        }
+        verbo = VERBOS_STATUS.get(dados.status, "atualizou")
         enviar_push_para_matricula(
             matricula=linha["solicitante_matricula"],
-            titulo=f"{AREA_OFICINA_NOMES.get(linha['area'], linha['area'])} {verbo} sua atividade — {tag}",
-            corpo=f"Motivo: {motivo_status}",
+            titulo=f"{nome_area} {verbo} sua atividade — {tag}",
+            corpo=(f"Motivo: {motivo_status}" if motivo_status else "Sem observações."),
             url="/"
         )
     return {"sucesso": True}
@@ -2618,6 +2664,80 @@ def verificar_atrasos_oficina():
         )
 
     return {"sucesso": True, "notificadas": len(atrasadas)}
+
+
+# ==========================================================================
+# 🆕 CONVERSA DA ATIVIDADE — mensagens de mão dupla numa atividade
+# específica. Ver comentário da tabela oficina_atividade_mensagens
+# (schema) pros casos de uso reais que isso resolve.
+# ==========================================================================
+@app.post("/api/oficina/atividade/mensagem", tags=["Oficina"], summary="Enviar mensagem na conversa de uma atividade (avisa o outro lado)")
+def criar_mensagem_atividade_oficina(dados: OficinaAtividadeMensagem):
+    agora = agora_brasil().isoformat()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT area, equipamento_id, solicitante_matricula FROM oficina_atividades WHERE id = %s",
+            (dados.atividade_id,)
+        )
+        atividade = cursor.fetchone()
+        if not atividade:
+            raise HTTPException(status_code=404, detail="Atividade não encontrada.")
+
+        cursor.execute(
+            """
+            INSERT INTO oficina_atividade_mensagens (atividade_id, autor_matricula, autor_nome, mensagem, criado_em)
+            VALUES (%s, %s, %s, %s, %s) RETURNING id
+            """,
+            (dados.atividade_id, dados.autor_matricula, dados.autor_nome, dados.mensagem, agora)
+        )
+        novo_id = cursor.fetchone()["id"]
+        conn.commit()
+
+    # 📲 Avisa o OUTRO LADO — nunca quem mandou a própria mensagem.
+    # "Outro lado" depende de quem escreveu:
+    #   - Se foi o solicitante (quem pediu a atividade) -> avisa a
+    #     área toda (mesmo alvo que uma atividade nova usa).
+    #   - Se foi alguém da área (ou a atividade não tem solicitante
+    #     identificado, ex: tarefa criada direto no quadro) -> avisa
+    #     especificamente o solicitante, se tiver um.
+    tag = atividade["equipamento_id"] or ""
+    nome_area = AREA_OFICINA_NOMES.get(atividade["area"], atividade["area"])
+    eh_o_solicitante_escrevendo = bool(dados.autor_matricula) and dados.autor_matricula == atividade["solicitante_matricula"]
+
+    if eh_o_solicitante_escrevendo:
+        enviar_push_para_area(
+            titulo=f"💬 {dados.autor_nome} — {tag or nome_area}",
+            corpo=dados.mensagem,
+            area=atividade["area"]
+        )
+    elif atividade["solicitante_matricula"]:
+        enviar_push_para_matricula(
+            matricula=atividade["solicitante_matricula"],
+            titulo=f"💬 {nome_area} respondeu — {tag}",
+            corpo=f"{dados.autor_nome}: {dados.mensagem}"
+        )
+    # Sem solicitante e quem escreveu não é ele: é conversa interna da
+    # própria área (atividade criada direto no quadro) — não tem "outro
+    # lado" fora da área pra avisar.
+
+    return {"sucesso": True, "id": novo_id}
+
+
+@app.get("/api/oficina/atividade/mensagens/{atividade_id}", tags=["Oficina"], summary="Listar mensagens da conversa de uma atividade")
+def listar_mensagens_atividade_oficina(atividade_id: int):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, autor_matricula, autor_nome, mensagem, criado_em
+            FROM oficina_atividade_mensagens
+            WHERE atividade_id = %s
+            ORDER BY id ASC
+            """,
+            (atividade_id,)
+        )
+        return cursor.fetchall()
 
 
 @app.post("/api/oficina/atividade/excluir", tags=["Oficina"], summary="Excluir atividade da Oficina")
@@ -3309,6 +3429,7 @@ def listar_atividades_extra_checklist_execucao(execucao_id: int):
         cursor.execute(
             """
             SELECT ce.id, ce.area, ce.descricao, ce.operador_matricula, ce.operador_nome, ce.criado_em,
+                   ce.oficina_atividade_id,
                    oa.status AS status_atividade, oa.concluido_em AS concluido_em, oa.motivo_status AS motivo_status
             FROM checklist_execucao_atividades_extra ce
             LEFT JOIN oficina_atividades oa ON oa.id = ce.oficina_atividade_id
