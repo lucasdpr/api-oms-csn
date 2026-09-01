@@ -3083,67 +3083,64 @@ def marcar_etapa_checklist_execucao(dados: ChecklistExecucaoMarcar):
             (dados.etapa_id, dados.equipamento_id, acao, dados.colaborador, dados.tecnico_matricula, dados.tecnico_nome, agora)
         )
 
-        # 🆕 AVISO ENTRE ÁREAS: quando a Mecânica está terminando uma
-        # fase (Chegada/Manutenção/Saída) e sobra só a ÚLTIMA etapa
-        # dela pendente, avisa a Elétrica/Hidráulica que a peça está
-        # "quase liberada" pra elas entrarem — dá tempo de se
-        # organizarem ANTES da Mecânica terminar de vez, não só depois.
+        # 🆕 AVISO POR LOTE/FASE: em vez de avisar só Elétrica/Hidráulica
+        # quando falta a última etapa de Mecânica (versão anterior),
+        # agora avisa TODO MUNDO ENVOLVIDO (Mecânica + Elétrica +
+        # Hidráulica) sempre que uma FASE inteira (Chegada ou
+        # Manutenção) fecha 100% — é o momento de virada real: Chegada
+        # concluída = Manutenção pode começar; Manutenção concluída =
+        # Saída pode começar (todo mundo já sabe que precisa ir lá
+        # fechar a parte dele). Saída concluída não tem aviso aqui — é
+        # o próprio fim do reparo, já tratado pelo fluxo de "Concluir".
         #
-        # Só se aplica a tipos de equipamento que separam etapa
+        # Só se aplica a tipos de equipamento que separam fase
         # (chegada/manutencao/saida) de especialidade — hoje só o Molde
-        # MCC4. Nos outros tipos "area" já É a especialidade, então
-        # essa lógica não faz sentido (nunca tem "outra especialidade
-        # na mesma aba" pra avisar).
+        # MCC4. Nos outros tipos "area" já É a especialidade, então uma
+        # "fase" com várias especialidades dentro não existe.
+        PROXIMA_FASE_APOS = {"chegada": "Manutenção", "manutencao": "Saída"}
         if dados.marcado:
-            cursor.execute("SELECT area, especialidade FROM checklist_execucao_etapas WHERE id = %s", (dados.etapa_id,))
+            cursor.execute("SELECT area FROM checklist_execucao_etapas WHERE id = %s", (dados.etapa_id,))
             etapa_marcada = cursor.fetchone()
-            if etapa_marcada and (etapa_marcada["especialidade"] or "mecanica") == "mecanica":
+            aba = etapa_marcada["area"] if etapa_marcada else None
+            if aba in PROXIMA_FASE_APOS:
                 cursor.execute("SELECT tipo_equipamento FROM checklist_execucao_execucoes WHERE id = %s", (dados.execucao_id,))
                 execucao_row = cursor.fetchone()
                 tipo_equipamento = execucao_row["tipo_equipamento"] if execucao_row else None
                 if tipo_equipamento == "molde-mcc4":
-                    aba = etapa_marcada["area"]
                     cursor.execute(
                         """
-                        SELECT COALESCE(m.marcado, FALSE) AS marcado
+                        SELECT e.especialidade, COALESCE(m.marcado, FALSE) AS marcado
                         FROM checklist_execucao_etapas e
                         LEFT JOIN checklist_execucao_marcacoes m
                                ON m.etapa_id = e.id AND m.execucao_id = %s
-                        WHERE e.equipamento_id = %s AND e.area = %s AND e.especialidade = 'mecanica' AND e.ativo = TRUE
+                        WHERE e.equipamento_id = %s AND e.area = %s AND e.ativo = TRUE
                         """,
                         (dados.execucao_id, tipo_equipamento, aba)
                     )
-                    pendentes_mecanica = sum(1 for r in cursor.fetchall() if not r["marcado"])
-                    if pendentes_mecanica == 1:
+                    linhas_fase = cursor.fetchall()
+                    fase_completa = bool(linhas_fase) and all(r["marcado"] for r in linhas_fase)
+                    if fase_completa:
+                        # 1 linha só por (execução, fase) — dedupe do LOTE
+                        # inteiro, não por área, porque é 1 evento só
+                        # ("fase virou") que avisa todo mundo de uma vez.
                         cursor.execute(
                             """
-                            SELECT DISTINCT e.especialidade
-                            FROM checklist_execucao_etapas e
-                            LEFT JOIN checklist_execucao_marcacoes m
-                                   ON m.etapa_id = e.id AND m.execucao_id = %s
-                            WHERE e.equipamento_id = %s AND e.area = %s AND e.especialidade != 'mecanica' AND e.ativo = TRUE
-                              AND COALESCE(m.marcado, FALSE) = FALSE
+                            INSERT INTO checklist_execucao_avisos_area (execucao_id, aba, area_avisada, criado_em)
+                            VALUES (%s, %s, 'fase_completa', %s)
+                            ON CONFLICT (execucao_id, aba, area_avisada) DO NOTHING
+                            RETURNING id
                             """,
-                            (dados.execucao_id, tipo_equipamento, aba)
+                            (dados.execucao_id, aba, agora)
                         )
-                        for linha in cursor.fetchall():
-                            especialidade_pendente = linha["especialidade"]
-                            cursor.execute(
-                                """
-                                INSERT INTO checklist_execucao_avisos_area (execucao_id, aba, area_avisada, criado_em)
-                                VALUES (%s, %s, %s, %s)
-                                ON CONFLICT (execucao_id, aba, area_avisada) DO NOTHING
-                                RETURNING id
-                                """,
-                                (dados.execucao_id, aba, especialidade_pendente, agora)
-                            )
-                            if cursor.fetchone():  # só dispara push se inseriu de fato (nunca avisado antes)
-                                nome_aba = NOME_AREA_PUSH.get(aba, aba)
-                                nome_especialidade = NOME_AREA_PUSH.get(especialidade_pendente, especialidade_pendente)
+                        if cursor.fetchone():  # só dispara se inseriu de fato (nunca avisado antes pra essa fase)
+                            especialidades_envolvidas = sorted({(r["especialidade"] or "mecanica") for r in linhas_fase})
+                            nome_aba = NOME_AREA_PUSH.get(aba, aba)
+                            nome_proxima_fase = PROXIMA_FASE_APOS[aba]
+                            for especialidade in especialidades_envolvidas:
                                 enviar_push_para_area(
-                                    titulo=f"Molde {dados.equipamento_id} quase liberado",
-                                    corpo=f"Mecânica está terminando \"{nome_aba}\" — {nome_especialidade} pode se preparar pra entrar.",
-                                    area=especialidade_pendente,
+                                    titulo=f"Molde {dados.equipamento_id} — {nome_aba} concluída",
+                                    corpo=f"\"{nome_aba}\" 100% concluída. {nome_proxima_fase} pode começar — todo mundo envolvido, bora fechar a parte de vocês.",
+                                    area=especialidade,
                                     url="/"
                                 )
 
