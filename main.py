@@ -3328,9 +3328,13 @@ def marcar_etapa_checklist_execucao(dados: ChecklistExecucaoMarcar):
         # o próprio fim do reparo, já tratado pelo fluxo de "Concluir".
         #
         # Só se aplica a tipos de equipamento que separam fase
-        # (chegada/manutencao/saida) de especialidade — hoje só o Molde
-        # MCC4. Nos outros tipos "area" já É a especialidade, então uma
-        # "fase" com várias especialidades dentro não existe.
+        # (chegada/manutencao/saida) de especialidade — hoje Molde MCC4
+        # e Molde MCC2/3. Nos outros tipos "area" já É a especialidade,
+        # então uma "fase" com várias especialidades dentro não existe.
+        # 🆕 Precisa bater com CHECKLIST_EXECUCAO_SECOES_POR_TIPO do
+        # front (JS/Core/dados.js) — qualquer tipo novo que ganhar essa
+        # divisão por fase entra nos dois lugares.
+        TIPOS_CHECKLIST_POR_FASE = {"molde-mcc4", "molde-mcc2-3"}
         PROXIMA_FASE_APOS = {"chegada": "Manutenção", "manutencao": "Saída"}
         if dados.marcado:
             cursor.execute("SELECT area FROM checklist_execucao_etapas WHERE id = %s", (dados.etapa_id,))
@@ -3340,7 +3344,7 @@ def marcar_etapa_checklist_execucao(dados: ChecklistExecucaoMarcar):
                 cursor.execute("SELECT tipo_equipamento FROM checklist_execucao_execucoes WHERE id = %s", (dados.execucao_id,))
                 execucao_row = cursor.fetchone()
                 tipo_equipamento = execucao_row["tipo_equipamento"] if execucao_row else None
-                if tipo_equipamento == "molde-mcc4":
+                if tipo_equipamento in TIPOS_CHECKLIST_POR_FASE:
                     cursor.execute(
                         """
                         SELECT e.especialidade, COALESCE(m.marcado, FALSE) AS marcado
