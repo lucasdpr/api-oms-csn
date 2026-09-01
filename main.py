@@ -3334,7 +3334,7 @@ def marcar_etapa_checklist_execucao(dados: ChecklistExecucaoMarcar):
         # 🆕 Precisa bater com CHECKLIST_EXECUCAO_SECOES_POR_TIPO do
         # front (JS/Core/dados.js) — qualquer tipo novo que ganhar essa
         # divisão por fase entra nos dois lugares.
-        TIPOS_CHECKLIST_POR_FASE = {"molde-mcc4", "molde-mcc2-3"}
+        TIPOS_CHECKLIST_POR_FASE = {"molde-mcc4", "molde-mcc2-3", "horizontal"}
         PROXIMA_FASE_APOS = {"chegada": "Manutenção", "manutencao": "Saída"}
         if dados.marcado:
             cursor.execute("SELECT area FROM checklist_execucao_etapas WHERE id = %s", (dados.etapa_id,))
