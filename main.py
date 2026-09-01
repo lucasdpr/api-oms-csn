@@ -901,6 +901,23 @@ def init_db():
             ADD COLUMN IF NOT EXISTS descricao TEXT
         ''')
 
+        # 🆕 ESPECIALIDADE (mecanica/eletrica/hidraulica) — separada de
+        # "area", que virou a ETAPA (chegada/manutencao/saida) pro Molde
+        # MCC4. Antes disso, o Molde MCC4 migrou a maioria das etapas de
+        # area="mecanica/eletrica/hidraulica" pra area="chegada/
+        # manutencao/saida" pra bater com as novas abas — só que isso
+        # jogou fora a informação de especialidade, deixando tudo
+        # misturado numa lista só dentro de cada aba (era esse o motivo
+        # de "elétrica não tem nada, hidráulica não tem nada": os itens
+        # existiam, só não davam pra separar visualmente). Default
+        # 'mecanica' porque é a maioria — etapas antigas sem classificação
+        # nova continuam aparecendo (só que agrupadas como mecânica) em
+        # vez de sumirem.
+        cursor.execute('''
+            ALTER TABLE checklist_execucao_etapas
+            ADD COLUMN IF NOT EXISTS especialidade TEXT NOT NULL DEFAULT 'mecanica'
+        ''')
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS laudos (
                 id SERIAL PRIMARY KEY,
@@ -1270,6 +1287,10 @@ class ChecklistExecucaoEtapaNova(BaseModel):
     area: str
     texto: str
     operador: str  # matrícula de quem está cadastrando (checado contra ADM)
+    # 🆕 Especialidade de quem executa (mecanica/eletrica/hidraulica) —
+    # independente da "area" (que agora é a etapa: chegada/manutencao/
+    # saida pro Molde MCC4). Permite sub-agrupar dentro de cada etapa.
+    especialidade: str = "mecanica"
     # 🆕 Ponte com o Folhão: id do campo no documento oficial (ex:
     # "m4-aj-tfr") pro qual essa etapa deve jogar o valor automaticamente.
     # Opcional — etapa sem isso continua funcionando igual, só não
@@ -1315,6 +1336,8 @@ class ChecklistExecucaoEtapaEditar(BaseModel):
     # Molde MCC4 que passou a usar Chegada/Manutenção/Saída em vez das
     # seções genéricas). Mesma lógica: None = não mexe na área atual.
     area: Optional[str] = None
+    # 🆕 Especialidade (mecanica/eletrica/hidraulica) — None = não mexe.
+    especialidade: Optional[str] = None
 
 
 class ChecklistExecucaoEtapaExcluir(BaseModel):
@@ -2691,7 +2714,7 @@ def listar_etapas_checklist_execucao(tipo_equipamento: str, execucao_id: Optiona
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT e.id, e.area, e.texto, e.ordem, e.folhao_campo, e.tipo_resposta, e.descricao,
+            SELECT e.id, e.area, e.especialidade, e.texto, e.ordem, e.folhao_campo, e.tipo_resposta, e.descricao,
                    COALESCE(m.marcado, FALSE) AS marcado,
                    m.colaborador, m.tecnico_matricula, m.tecnico_nome, m.data_hora,
                    m.valor, m.trocado
@@ -2886,10 +2909,10 @@ def criar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaNova):
         proxima_ordem = cursor.fetchone()["proxima"]
         cursor.execute(
             """
-            INSERT INTO checklist_execucao_etapas (equipamento_id, area, texto, ordem, criado_por, criado_em, folhao_campo, tipo_resposta, descricao)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+            INSERT INTO checklist_execucao_etapas (equipamento_id, area, especialidade, texto, ordem, criado_por, criado_em, folhao_campo, tipo_resposta, descricao)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
             """,
-            (dados.equipamento_id, dados.area, dados.texto, proxima_ordem, dados.operador, agora_brasil().isoformat(), dados.folhao_campo, dados.tipo_resposta, dados.descricao)
+            (dados.equipamento_id, dados.area, dados.especialidade, dados.texto, proxima_ordem, dados.operador, agora_brasil().isoformat(), dados.folhao_campo, dados.tipo_resposta, dados.descricao)
         )
         novo_id = cursor.fetchone()["id"]
         conn.commit()
@@ -2925,6 +2948,9 @@ def editar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaEditar):
     if dados.area is not None:
         campos.append("area = %s")
         valores.append(dados.area)
+    if dados.especialidade is not None:
+        campos.append("especialidade = %s")
+        valores.append(dados.especialidade)
     valores.append(dados.id)
 
     with get_db() as conn:
