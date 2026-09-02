@@ -3151,7 +3151,7 @@ def valores_folhao_checklist_execucao(tipo_equipamento: str, execucao_id: Option
     (folhaoMolde4.js) chama isso em vez de ler <input> da tela — assim o
     técnico nunca precisa preencher o mesmo dado duas vezes.
 
-    3 tipos de etapa:
+    4 tipos de etapa:
     - "sim_nao": 🆕 agora usa a resposta REAL guardada em "valor" ('SIM'
       ou 'NÃO' — ver /marcar, que passou a perguntar isso antes de só
       assumir 'feito = SIM'). Etapas antigas, marcadas antes dessa
@@ -3162,13 +3162,23 @@ def valores_folhao_checklist_execucao(tipo_equipamento: str, execucao_id: Option
       preenchem várias dezenas de campos de uma vez. Aqui folhao_campo
       guarda um JSON { "1000-sup": "m4-fa-1000-es", ... } e valor guarda
       outro JSON { "1000-sup": "0.12", ... } com a mesma chave — os dois
-      são cruzados e cada um vira uma entrada solta no resultado final."""
+      são cruzados e cada um vira uma entrada solta no resultado final.
+    - 🆕 "sim_nao_assinatura": pra listas de tarefas tipo "Checklist de
+      Manutenção" do Horizontal, que no Folhão pedem, por item, um
+      checkbox (Geral OU Parcial, conforme o tipo de execução do
+      reparo) + Executante + Matrícula + Data — dados que a marcação já
+      tem (colaborador/tecnico_matricula/data_hora), sem o técnico
+      precisar digitar de novo. Aqui folhao_campo guarda um JSON
+      { "checkbox_geral": "hz-g-3", "checkbox_parcial": "hz-p-3",
+        "executante": "hz-resp-3", "matricula": "hz-mat-3",
+        "data": "hz-dat-3" } — todas as chaves opcionais."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
             SELECT e.folhao_campo, e.tipo_resposta,
-                   COALESCE(m.marcado, FALSE) AS marcado, m.valor
+                   COALESCE(m.marcado, FALSE) AS marcado, m.valor,
+                   m.colaborador, m.tecnico_matricula, m.tecnico_nome, m.data_hora
             FROM checklist_execucao_etapas e
             LEFT JOIN checklist_execucao_marcacoes m
                    ON m.etapa_id = e.id AND m.execucao_id = %s
@@ -3177,6 +3187,15 @@ def valores_folhao_checklist_execucao(tipo_equipamento: str, execucao_id: Option
             (execucao_id, tipo_equipamento)
         )
         linhas = cursor.fetchall()
+
+        tipo_execucao_exec = None
+        if execucao_id is not None:
+            cursor.execute(
+                "SELECT tipo_execucao FROM checklist_execucao_execucoes WHERE id = %s",
+                (execucao_id,)
+            )
+            row_exec = cursor.fetchone()
+            tipo_execucao_exec = (row_exec["tipo_execucao"] or "").upper() if row_exec else None
 
     valores = {}
     for l in linhas:
@@ -3190,6 +3209,22 @@ def valores_folhao_checklist_execucao(tipo_equipamento: str, execucao_id: Option
                 valores[campo_real] = mapa_valores.get(chave, "")
         elif l["tipo_resposta"] == "medicao":
             valores[l["folhao_campo"]] = l["valor"] or ""
+        elif l["tipo_resposta"] == "sim_nao_assinatura":
+            if not l["marcado"]:
+                continue  # nada marcado ainda — não preenche nada (nem checkbox errado)
+            try:
+                mapa = json_lib.loads(l["folhao_campo"])
+            except (TypeError, ValueError):
+                continue
+            campo_checkbox = mapa.get("checkbox_parcial") if tipo_execucao_exec == "PARCIAL" else mapa.get("checkbox_geral")
+            if campo_checkbox:
+                valores[campo_checkbox] = "OK"
+            if mapa.get("executante"):
+                valores[mapa["executante"]] = l["colaborador"] or l["tecnico_nome"] or ""
+            if mapa.get("matricula") and l["tecnico_matricula"]:
+                valores[mapa["matricula"]] = l["tecnico_matricula"]
+            if mapa.get("data") and l["data_hora"]:
+                valores[mapa["data"]] = l["data_hora"][:10]
         else:
             # 🆕 "SIM"/"NÃO" bate direto com o value="" dos radios do
             # Folhão (ver preencherFolhaoComChecklistExecucao no
