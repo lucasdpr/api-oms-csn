@@ -3102,7 +3102,12 @@ def status_checklist_execucao(equipamento_id: str):
         )
         execucao = cursor.fetchone()
         if not execucao:
-            return {"execucao_id": None, "tipo_equipamento": None, "tipo_execucao": None, "total": 0, "marcadas": 0, "percentual": 0, "completo": False}
+            return {
+                "execucao_id": None, "tipo_equipamento": None, "tipo_execucao": None,
+                "total": 0, "marcadas": 0, "percentual": 0, "completo": False,
+                "iniciada_em": None, "concluida_em": None,
+                "tecnico_matricula": None, "tecnico_nome": None
+            }
 
         cursor.execute(
             """
@@ -3126,7 +3131,15 @@ def status_checklist_execucao(equipamento_id: str):
             "total": total,
             "marcadas": marcadas,
             "percentual": percentual,
-            "completo": total > 0 and marcadas == total
+            "completo": total > 0 and marcadas == total,
+            # 🆕 Início/fim REAIS do reparo (gravados pelo servidor em
+            # /execucoes/iniciar e /execucoes/finalizar) + quem iniciou —
+            # o Folhão usa isso pra travar DATA INÍCIO/FIM e LÍDER
+            # RESPONSÁVEL em vez de deixar o técnico digitar/reeditar.
+            "iniciada_em": execucao["iniciada_em"],
+            "concluida_em": execucao["concluida_em"],
+            "tecnico_matricula": execucao["tecnico_matricula"],
+            "tecnico_nome": execucao["tecnico_nome"]
         }
 
 
