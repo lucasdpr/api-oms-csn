@@ -1,0 +1,758 @@
+{
+  "1 — Lavagem e/ou Limpeza Mecânica": {
+    "checkbox_geral": "bw-g-0",
+    "checkbox_parcial": "bw-p-0",
+    "executante": "bw-resp-0",
+    "matricula": "bw-mat-0",
+    "data": "bw-dat-0"
+  },
+  "2.1 — Teste Hidrostático": {
+    "checkbox_geral": "bw-g-1",
+    "checkbox_parcial": "bw-p-1",
+    "executante": "bw-resp-1",
+    "matricula": "bw-mat-1",
+    "data": "bw-dat-1"
+  },
+  "2.2 — Teste Hidráulico": {
+    "checkbox_geral": "bw-g-2",
+    "checkbox_parcial": "bw-p-2",
+    "executante": "bw-resp-2",
+    "matricula": "bw-mat-2",
+    "data": "bw-dat-2"
+  },
+  "2.3 — Teste de Refrigeração": {
+    "checkbox_geral": "bw-g-3",
+    "checkbox_parcial": "bw-p-3",
+    "executante": "bw-resp-3",
+    "matricula": "bw-mat-3",
+    "data": "bw-dat-3"
+  },
+  "2.4 — Aferição de Gap (255mm)": {
+    "checkbox_geral": "bw-g-4",
+    "checkbox_parcial": "bw-p-4",
+    "executante": "bw-resp-4",
+    "matricula": "bw-mat-4",
+    "data": "bw-dat-4"
+  },
+  "2.5 — Abrir Segmento": {
+    "checkbox_geral": "bw-g-5",
+    "checkbox_parcial": "bw-p-5",
+    "executante": "bw-resp-5",
+    "matricula": "bw-mat-5",
+    "data": "bw-dat-5"
+  },
+  "3.1 — Desmontagem de proteções": {
+    "checkbox_geral": "bw-g-6",
+    "checkbox_parcial": "bw-p-6",
+    "executante": "bw-resp-6",
+    "matricula": "bw-mat-6",
+    "data": "bw-dat-6"
+  },
+  "3.2 — Retirar chavetas": {
+    "checkbox_geral": "bw-g-7",
+    "checkbox_parcial": "bw-p-7",
+    "executante": "bw-resp-7",
+    "matricula": "bw-mat-7",
+    "data": "bw-dat-7"
+  },
+  "3.3 — Desconectar pinos dos cilindros de elevação": {
+    "checkbox_geral": "bw-g-8",
+    "checkbox_parcial": "bw-p-8",
+    "executante": "bw-resp-8",
+    "matricula": "bw-mat-8",
+    "data": "bw-dat-8"
+  },
+  "3.4 — Retirada da Barra Transversal": {
+    "checkbox_geral": "bw-g-9",
+    "checkbox_parcial": "bw-p-9",
+    "executante": "bw-resp-9",
+    "matricula": "bw-mat-9",
+    "data": "bw-dat-9"
+  },
+  "3.5 — Desconectar flexíveis principais": {
+    "checkbox_geral": "bw-g-10",
+    "checkbox_parcial": "bw-p-10",
+    "executante": "bw-resp-10",
+    "matricula": "bw-mat-10",
+    "data": "bw-dat-10"
+  },
+  "3.6 — Retirar parafusos de fixação das buchas": {
+    "checkbox_geral": "bw-g-11",
+    "checkbox_parcial": "bw-p-11",
+    "executante": "bw-resp-11",
+    "matricula": "bw-mat-11",
+    "data": "bw-dat-11"
+  },
+  "3.7 — Transferir base para stand": {
+    "checkbox_geral": "bw-g-12",
+    "checkbox_parcial": "bw-p-12",
+    "executante": "bw-resp-12",
+    "matricula": "bw-mat-12",
+    "data": "bw-dat-12"
+  },
+  "3.8 — Aferir pass-line Inf. e Sup.": {
+    "checkbox_geral": "bw-g-13",
+    "checkbox_parcial": "bw-p-13",
+    "executante": "bw-resp-13",
+    "matricula": "bw-mat-13",
+    "data": "bw-dat-13"
+  },
+  "3.9 — Retirar cangalhas (Inf. e Sup.)": {
+    "checkbox_geral": "bw-g-14",
+    "checkbox_parcial": "bw-p-14",
+    "executante": "bw-resp-14",
+    "matricula": "bw-mat-14",
+    "data": "bw-dat-14"
+  },
+  "3.10 — Desconectar flexíveis das juntas rotativas": {
+    "checkbox_geral": "bw-g-15",
+    "checkbox_parcial": "bw-p-15",
+    "executante": "bw-resp-15",
+    "matricula": "bw-mat-15",
+    "data": "bw-dat-15"
+  },
+  "3.11 — Retirar proteções de mancal": {
+    "checkbox_geral": "bw-g-16",
+    "checkbox_parcial": "bw-p-16",
+    "executante": "bw-resp-16",
+    "matricula": "bw-mat-16",
+    "data": "bw-dat-16"
+  },
+  "3.12 — Desmontagem dos rolos (Destorquear e soltá-los) inferior": {
+    "checkbox_geral": "bw-g-17",
+    "checkbox_parcial": "bw-p-17",
+    "executante": "bw-resp-17",
+    "matricula": "bw-mat-17",
+    "data": "bw-dat-17"
+  },
+  "3.13 — Desmontagem dos rolos (Destorquear e soltá-los) superior": {
+    "checkbox_geral": "bw-g-18",
+    "checkbox_parcial": "bw-p-18",
+    "executante": "bw-resp-18",
+    "matricula": "bw-mat-18",
+    "data": "bw-dat-18"
+  },
+  "3.14 — Desmontagem da estrutura do rolo acionado": {
+    "checkbox_geral": "bw-g-19",
+    "checkbox_parcial": "bw-p-19",
+    "executante": "bw-resp-19",
+    "matricula": "bw-mat-19",
+    "data": "bw-dat-19"
+  },
+  "3.15 — Retirada dos cilindros motriz": {
+    "checkbox_geral": "bw-g-20",
+    "checkbox_parcial": "bw-p-20",
+    "executante": "bw-resp-20",
+    "matricula": "bw-mat-20",
+    "data": "bw-dat-20"
+  },
+  "3.16 — Desmontagem de buchas e conjuntos na base": {
+    "checkbox_geral": "bw-g-21",
+    "checkbox_parcial": "bw-p-21",
+    "executante": "bw-resp-21",
+    "matricula": "bw-mat-21",
+    "data": "bw-dat-21"
+  },
+  "3.17 — Desmontagem de buchas e conjuntos": {
+    "checkbox_geral": "bw-g-22",
+    "checkbox_parcial": "bw-p-22",
+    "executante": "bw-resp-22",
+    "matricula": "bw-mat-22",
+    "data": "bw-dat-22"
+  },
+  "3.18 — Preparar bases e barra para jateamento e pintura": {
+    "checkbox_geral": "bw-g-23",
+    "checkbox_parcial": "bw-p-23",
+    "executante": "bw-resp-23",
+    "matricula": "bw-mat-23",
+    "data": "bw-dat-23"
+  },
+  "4.1 — Desmontagem de proteções e preparação dos calços e base Inferior": {
+    "checkbox_geral": "bw-g-24",
+    "checkbox_parcial": "bw-p-24",
+    "executante": "bw-resp-24",
+    "matricula": "bw-mat-24",
+    "data": "bw-dat-24"
+  },
+  "4.2 — Troca de oring’s": {
+    "checkbox_geral": "bw-g-25",
+    "checkbox_parcial": "bw-p-25",
+    "executante": "bw-resp-25",
+    "matricula": "bw-mat-25",
+    "data": "bw-dat-25"
+  },
+  "4.3 — Montagem de distribuidores": {
+    "checkbox_geral": "bw-g-26",
+    "checkbox_parcial": "bw-p-26",
+    "executante": "bw-resp-26",
+    "matricula": "bw-mat-26",
+    "data": "bw-dat-26"
+  },
+  "4.4 — Fixação dos distribuidores na base": {
+    "checkbox_geral": "bw-g-27",
+    "checkbox_parcial": "bw-p-27",
+    "executante": "bw-resp-27",
+    "matricula": "bw-mat-27",
+    "data": "bw-dat-27"
+  },
+  "4.5 — Desobstrução das tubulações de graxa e de refrigeração": {
+    "checkbox_geral": "bw-g-28",
+    "checkbox_parcial": "bw-p-28",
+    "executante": "bw-resp-28",
+    "matricula": "bw-mat-28",
+    "data": "bw-dat-28"
+  },
+  "4.6 — Preparação dos Rolos": {
+    "checkbox_geral": "bw-g-29",
+    "checkbox_parcial": "bw-p-29",
+    "executante": "bw-resp-29",
+    "matricula": "bw-mat-29",
+    "data": "bw-dat-29"
+  },
+  "4.7 — Montagem de flexíveis na base": {
+    "checkbox_geral": "bw-g-30",
+    "checkbox_parcial": "bw-p-30",
+    "executante": "bw-resp-30",
+    "matricula": "bw-mat-30",
+    "data": "bw-dat-30"
+  },
+  "4.8 — Preparação de pés e tulipas": {
+    "checkbox_geral": "bw-g-31",
+    "checkbox_parcial": "bw-p-31",
+    "executante": "bw-resp-31",
+    "matricula": "bw-mat-31",
+    "data": "bw-dat-31"
+  },
+  "4.9 — Montagem de rolos na base": {
+    "checkbox_geral": "bw-g-32",
+    "checkbox_parcial": "bw-p-32",
+    "executante": "bw-resp-32",
+    "matricula": "bw-mat-32",
+    "data": "bw-dat-32"
+  },
+  "4.10 — Torque dos parafusos dos mancais": {
+    "checkbox_geral": "bw-g-33",
+    "checkbox_parcial": "bw-p-33",
+    "executante": "bw-resp-33",
+    "matricula": "bw-mat-33",
+    "data": "bw-dat-33"
+  },
+  "4.11 — Regulagem dos distribuidores": {
+    "checkbox_geral": "bw-g-34",
+    "checkbox_parcial": "bw-p-34",
+    "executante": "bw-resp-34",
+    "matricula": "bw-mat-34",
+    "data": "bw-dat-34"
+  },
+  "4.12 — Teste de Lubrificação": {
+    "checkbox_geral": "bw-g-35",
+    "checkbox_parcial": "bw-p-35",
+    "executante": "bw-resp-35",
+    "matricula": "bw-mat-35",
+    "data": "bw-dat-35"
+  },
+  "4.13 — Fixação dos distribuidores na base": {
+    "checkbox_geral": "bw-g-36",
+    "checkbox_parcial": "bw-p-36",
+    "executante": "bw-resp-36",
+    "matricula": "bw-mat-36",
+    "data": "bw-dat-36"
+  },
+  "4.14 — Preparar hastes": {
+    "checkbox_geral": "bw-g-37",
+    "checkbox_parcial": "bw-p-37",
+    "executante": "bw-resp-37",
+    "matricula": "bw-mat-37",
+    "data": "bw-dat-37"
+  },
+  "4.15 — Preparar e montar conjuntos de ajustes e buchas": {
+    "checkbox_geral": "bw-g-38",
+    "checkbox_parcial": "bw-p-38",
+    "executante": "bw-resp-38",
+    "matricula": "bw-mat-38",
+    "data": "bw-dat-38"
+  },
+  "4.16 — Montagem das buchas e conjuntos na base": {
+    "checkbox_geral": "bw-g-39",
+    "checkbox_parcial": "bw-p-39",
+    "executante": "bw-resp-39",
+    "matricula": "bw-mat-39",
+    "data": "bw-dat-39"
+  },
+  "4.17 — Montagem dos flexíveis principais": {
+    "checkbox_geral": "bw-g-40",
+    "checkbox_parcial": "bw-p-40",
+    "executante": "bw-resp-40",
+    "matricula": "bw-mat-40",
+    "data": "bw-dat-40"
+  },
+  "4.18 — Conectar flexíveis de juntas nos rolos": {
+    "checkbox_geral": "bw-g-41",
+    "checkbox_parcial": "bw-p-41",
+    "executante": "bw-resp-41",
+    "matricula": "bw-mat-41",
+    "data": "bw-dat-41"
+  },
+  "4.19 — Teste hidrostático juntas rotativas": {
+    "checkbox_geral": "bw-g-42",
+    "checkbox_parcial": "bw-p-42",
+    "executante": "bw-resp-42",
+    "matricula": "bw-mat-42",
+    "data": "bw-dat-42"
+  },
+  "4.20 — Teste hidrostático Mancal": {
+    "checkbox_geral": "bw-g-43",
+    "checkbox_parcial": "bw-p-43",
+    "executante": "bw-resp-43",
+    "matricula": "bw-mat-43",
+    "data": "bw-dat-43"
+  },
+  "4.21 — Aferir Pass-Line e Ajustar": {
+    "checkbox_geral": "bw-g-44",
+    "checkbox_parcial": "bw-p-44",
+    "executante": "bw-resp-44",
+    "matricula": "bw-mat-44",
+    "data": "bw-dat-44"
+  },
+  "4.22 — Montagem e alinhamento das cangalhas": {
+    "checkbox_geral": "bw-g-45",
+    "checkbox_parcial": "bw-p-45",
+    "executante": "bw-resp-45",
+    "matricula": "bw-mat-45",
+    "data": "bw-dat-45"
+  },
+  "5.1 — Desmontar todos os bicos": {
+    "checkbox_geral": "bw-g-46",
+    "checkbox_parcial": "bw-p-46",
+    "executante": "bw-resp-46",
+    "matricula": "bw-mat-46",
+    "data": "bw-dat-46"
+  },
+  "5.2 — Realizar Limpeza das tubulações": {
+    "checkbox_geral": "bw-g-47",
+    "checkbox_parcial": "bw-p-47",
+    "executante": "bw-resp-47",
+    "matricula": "bw-mat-47",
+    "data": "bw-dat-47"
+  },
+  "5.3 — Montar os bicos e flexíveis": {
+    "checkbox_geral": "bw-g-48",
+    "checkbox_parcial": "bw-p-48",
+    "executante": "bw-resp-48",
+    "matricula": "bw-mat-48",
+    "data": "bw-dat-48"
+  },
+  "5.4 — Realizar teste": {
+    "checkbox_geral": "bw-g-49",
+    "checkbox_parcial": "bw-p-49",
+    "executante": "bw-resp-49",
+    "matricula": "bw-mat-49",
+    "data": "bw-dat-49"
+  },
+  "6.1 — Preparação de Lines ou troca": {
+    "checkbox_geral": "bw-g-50",
+    "checkbox_parcial": "bw-p-50",
+    "executante": "bw-resp-50",
+    "matricula": "bw-mat-50",
+    "data": "bw-dat-50"
+  },
+  "6.2 — Preparação dos calços e apoios": {
+    "checkbox_geral": "bw-g-51",
+    "checkbox_parcial": "bw-p-51",
+    "executante": "bw-resp-51",
+    "matricula": "bw-mat-51",
+    "data": "bw-dat-51"
+  },
+  "6.3 — Troca de oring’s": {
+    "checkbox_geral": "bw-g-52",
+    "checkbox_parcial": "bw-p-52",
+    "executante": "bw-resp-52",
+    "matricula": "bw-mat-52",
+    "data": "bw-dat-52"
+  },
+  "6.4 — Desobstrução de tubulações de graxa e de refrigeração": {
+    "checkbox_geral": "bw-g-53",
+    "checkbox_parcial": "bw-p-53",
+    "executante": "bw-resp-53",
+    "matricula": "bw-mat-53",
+    "data": "bw-dat-53"
+  },
+  "6.5 — Montagem de proteções das tubulações e de stauff": {
+    "checkbox_geral": "bw-g-54",
+    "checkbox_parcial": "bw-p-54",
+    "executante": "bw-resp-54",
+    "matricula": "bw-mat-54",
+    "data": "bw-dat-54"
+  },
+  "6.6 — Verificar roscas dos parafusos M30": {
+    "checkbox_geral": "bw-g-55",
+    "checkbox_parcial": "bw-p-55",
+    "executante": "bw-resp-55",
+    "matricula": "bw-mat-55",
+    "data": "bw-dat-55"
+  },
+  "6.7 — Montagem do rolo motriz": {
+    "checkbox_geral": "bw-g-56",
+    "checkbox_parcial": "bw-p-56",
+    "executante": "bw-resp-56",
+    "matricula": "bw-mat-56",
+    "data": "bw-dat-56"
+  },
+  "7.1 — Preparação para receber estrutura e cilindros (Lines e mancais)": {
+    "checkbox_geral": "bw-g-57",
+    "checkbox_parcial": "bw-p-57",
+    "executante": "bw-resp-57",
+    "matricula": "bw-mat-57",
+    "data": "bw-dat-57"
+  },
+  "7.2 — Montagem de Cilindros Motriz": {
+    "checkbox_geral": "bw-g-58",
+    "checkbox_parcial": "bw-p-58",
+    "executante": "bw-resp-58",
+    "matricula": "bw-mat-58",
+    "data": "bw-dat-58"
+  },
+  "7.3 — Desmontagem de proteções e preparação dos calços e base Superior": {
+    "checkbox_geral": "bw-g-59",
+    "checkbox_parcial": "bw-p-59",
+    "executante": "bw-resp-59",
+    "matricula": "bw-mat-59",
+    "data": "bw-dat-59"
+  },
+  "7.4 — Troca de oring’s": {
+    "checkbox_geral": "bw-g-60",
+    "checkbox_parcial": "bw-p-60",
+    "executante": "bw-resp-60",
+    "matricula": "bw-mat-60",
+    "data": "bw-dat-60"
+  },
+  "7.5 — Desobstruição das tubulações de graxa e de refrigeração": {
+    "checkbox_geral": "bw-g-61",
+    "checkbox_parcial": "bw-p-61",
+    "executante": "bw-resp-61",
+    "matricula": "bw-mat-61",
+    "data": "bw-dat-61"
+  },
+  "7.6 — Preparação dos Rolos": {
+    "checkbox_geral": "bw-g-62",
+    "checkbox_parcial": "bw-p-62",
+    "executante": "bw-resp-62",
+    "matricula": "bw-mat-62",
+    "data": "bw-dat-62"
+  },
+  "7.7 — Troca de parafusos dos calços de alinhamento pass-line": {
+    "checkbox_geral": "bw-g-63",
+    "checkbox_parcial": "bw-p-63",
+    "executante": "bw-resp-63",
+    "matricula": "bw-mat-63",
+    "data": "bw-dat-63"
+  },
+  "7.8 — Montagem de rolos na base": {
+    "checkbox_geral": "bw-g-64",
+    "checkbox_parcial": "bw-p-64",
+    "executante": "bw-resp-64",
+    "matricula": "bw-mat-64",
+    "data": "bw-dat-64"
+  },
+  "7.9 — Aperto de parafusos nos mancais": {
+    "checkbox_geral": "bw-g-65",
+    "checkbox_parcial": "bw-p-65",
+    "executante": "bw-resp-65",
+    "matricula": "bw-mat-65",
+    "data": "bw-dat-65"
+  },
+  "7.10 — Montagem da estrutura": {
+    "checkbox_geral": "bw-g-66",
+    "checkbox_parcial": "bw-p-66",
+    "executante": "bw-resp-66",
+    "matricula": "bw-mat-66",
+    "data": "bw-dat-66"
+  },
+  "7.11 — Montagem de distribuidores": {
+    "checkbox_geral": "bw-g-67",
+    "checkbox_parcial": "bw-p-67",
+    "executante": "bw-resp-67",
+    "matricula": "bw-mat-67",
+    "data": "bw-dat-67"
+  },
+  "7.12 — Regulagem dos distribuidores": {
+    "checkbox_geral": "bw-g-68",
+    "checkbox_parcial": "bw-p-68",
+    "executante": "bw-resp-68",
+    "matricula": "bw-mat-68",
+    "data": "bw-dat-68"
+  },
+  "7.13 — Teste de Lubrificação": {
+    "checkbox_geral": "bw-g-69",
+    "checkbox_parcial": "bw-p-69",
+    "executante": "bw-resp-69",
+    "matricula": "bw-mat-69",
+    "data": "bw-dat-69"
+  },
+  "7.14 — Fixação dos distribuidores na base": {
+    "checkbox_geral": "bw-g-70",
+    "checkbox_parcial": "bw-p-70",
+    "executante": "bw-resp-70",
+    "matricula": "bw-mat-70",
+    "data": "bw-dat-70"
+  },
+  "7.15 — Montagem de proteções dos mancais": {
+    "checkbox_geral": "bw-g-71",
+    "checkbox_parcial": "bw-p-71",
+    "executante": "bw-resp-71",
+    "matricula": "bw-mat-71",
+    "data": "bw-dat-71"
+  },
+  "7.16 — Realização do teste hidrostático da base": {
+    "checkbox_geral": "bw-g-72",
+    "checkbox_parcial": "bw-p-72",
+    "executante": "bw-resp-72",
+    "matricula": "bw-mat-72",
+    "data": "bw-dat-72"
+  },
+  "7.17 — Virar a base": {
+    "checkbox_geral": "bw-g-73",
+    "checkbox_parcial": "bw-p-73",
+    "executante": "bw-resp-73",
+    "matricula": "bw-mat-73",
+    "data": "bw-dat-73"
+  },
+  "7.18 — Torque dos parafusos dos mancais": {
+    "checkbox_geral": "bw-g-74",
+    "checkbox_parcial": "bw-p-74",
+    "executante": "bw-resp-74",
+    "matricula": "bw-mat-74",
+    "data": "bw-dat-74"
+  },
+  "7.19 — Montagem de flexíveis de junta rotativa": {
+    "checkbox_geral": "bw-g-75",
+    "checkbox_parcial": "bw-p-75",
+    "executante": "bw-resp-75",
+    "matricula": "bw-mat-75",
+    "data": "bw-dat-75"
+  },
+  "7.20 — Aferir e ajustar pass-line": {
+    "checkbox_geral": "bw-g-76",
+    "checkbox_parcial": "bw-p-76",
+    "executante": "bw-resp-76",
+    "matricula": "bw-mat-76",
+    "data": "bw-dat-76"
+  },
+  "7.21 — Troca das válvulas dos cilindros": {
+    "checkbox_geral": "bw-g-77",
+    "checkbox_parcial": "bw-p-77",
+    "executante": "bw-resp-77",
+    "matricula": "bw-mat-77",
+    "data": "bw-dat-77"
+  },
+  "7.22 — Troca dos mangotes hidráulicos dos cilindros": {
+    "checkbox_geral": "bw-g-78",
+    "checkbox_parcial": "bw-p-78",
+    "executante": "bw-resp-78",
+    "matricula": "bw-mat-78",
+    "data": "bw-dat-78"
+  },
+  "7.23 — Montagem de proteções sanfonadas": {
+    "checkbox_geral": "bw-g-79",
+    "checkbox_parcial": "bw-p-79",
+    "executante": "bw-resp-79",
+    "matricula": "bw-mat-79",
+    "data": "bw-dat-79"
+  },
+  "7.24 — Substituição dos engates rápidos (hidráulicos)": {
+    "checkbox_geral": "bw-g-80",
+    "checkbox_parcial": "bw-p-80",
+    "executante": "bw-resp-80",
+    "matricula": "bw-mat-80",
+    "data": "bw-dat-80"
+  },
+  "7.25 — Substituição dos engates rápidos (refrigeração)": {
+    "checkbox_geral": "bw-g-81",
+    "checkbox_parcial": "bw-p-81",
+    "executante": "bw-resp-81",
+    "matricula": "bw-mat-81",
+    "data": "bw-dat-81"
+  },
+  "7.26 — Montagem de cangalhas na base": {
+    "checkbox_geral": "bw-g-82",
+    "checkbox_parcial": "bw-p-82",
+    "executante": "bw-resp-82",
+    "matricula": "bw-mat-82",
+    "data": "bw-dat-82"
+  },
+  "8.1 — Troca de cilindros de elevação": {
+    "checkbox_geral": "bw-g-83",
+    "checkbox_parcial": "bw-p-83",
+    "executante": "bw-resp-83",
+    "matricula": "bw-mat-83",
+    "data": "bw-dat-83"
+  },
+  "8.2 — Troca de cilindros clamp": {
+    "checkbox_geral": "bw-g-84",
+    "checkbox_parcial": "bw-p-84",
+    "executante": "bw-resp-84",
+    "matricula": "bw-mat-84",
+    "data": "bw-dat-84"
+  },
+  "8.3 — Montagem de blocos nos cilindros clamp": {
+    "checkbox_geral": "bw-g-85",
+    "checkbox_parcial": "bw-p-85",
+    "executante": "bw-resp-85",
+    "matricula": "bw-mat-85",
+    "data": "bw-dat-85"
+  },
+  "8.4 — Troca de oring’s (completo)": {
+    "checkbox_geral": "bw-g-86",
+    "checkbox_parcial": "bw-p-86",
+    "executante": "bw-resp-86",
+    "matricula": "bw-mat-86",
+    "data": "bw-dat-86"
+  },
+  "8.5 — Aperto de tubulações (Conferir)": {
+    "checkbox_geral": "bw-g-87",
+    "checkbox_parcial": "bw-p-87",
+    "executante": "bw-resp-87",
+    "matricula": "bw-mat-87",
+    "data": "bw-dat-87"
+  },
+  "8.6 — Montagem de mangotes dos cilindros de elevação": {
+    "checkbox_geral": "bw-g-88",
+    "checkbox_parcial": "bw-p-88",
+    "executante": "bw-resp-88",
+    "matricula": "bw-mat-88",
+    "data": "bw-dat-88"
+  },
+  "8.7 — Teste hidráulico da barra": {
+    "checkbox_geral": "bw-g-89",
+    "checkbox_parcial": "bw-p-89",
+    "executante": "bw-resp-89",
+    "matricula": "bw-mat-89",
+    "data": "bw-dat-89"
+  },
+  "9.1 — Movimentar base sup para inf": {
+    "checkbox_geral": "bw-g-90",
+    "checkbox_parcial": "bw-p-90",
+    "executante": "bw-resp-90",
+    "matricula": "bw-mat-90",
+    "data": "bw-dat-90"
+  },
+  "9.2 — Conectar flexíveis principais (graxa e água)": {
+    "checkbox_geral": "bw-g-91",
+    "checkbox_parcial": "bw-p-91",
+    "executante": "bw-resp-91",
+    "matricula": "bw-mat-91",
+    "data": "bw-dat-91"
+  },
+  "9.3 — Montar parafusos das buchas": {
+    "checkbox_geral": "bw-g-92",
+    "checkbox_parcial": "bw-p-92",
+    "executante": "bw-resp-92",
+    "matricula": "bw-mat-92",
+    "data": "bw-dat-92"
+  },
+  "9.4 — Preparação das hastes para receber a barra": {
+    "checkbox_geral": "bw-g-93",
+    "checkbox_parcial": "bw-p-93",
+    "executante": "bw-resp-93",
+    "matricula": "bw-mat-93",
+    "data": "bw-dat-93"
+  },
+  "9.5 — Alinhamento de cangalha superior": {
+    "checkbox_geral": "bw-g-94",
+    "checkbox_parcial": "bw-p-94",
+    "executante": "bw-resp-94",
+    "matricula": "bw-mat-94",
+    "data": "bw-dat-94"
+  },
+  "9.6 — Teste geral de juntas": {
+    "checkbox_geral": "bw-g-95",
+    "checkbox_parcial": "bw-p-95",
+    "executante": "bw-resp-95",
+    "matricula": "bw-mat-95",
+    "data": "bw-dat-95"
+  },
+  "9.7 — Montagem da barra transversal no segmento": {
+    "checkbox_geral": "bw-g-96",
+    "checkbox_parcial": "bw-p-96",
+    "executante": "bw-resp-96",
+    "matricula": "bw-mat-96",
+    "data": "bw-dat-96"
+  },
+  "9.8 — Aperto de parafusos dos cilindros clamp": {
+    "checkbox_geral": "bw-g-97",
+    "checkbox_parcial": "bw-p-97",
+    "executante": "bw-resp-97",
+    "matricula": "bw-mat-97",
+    "data": "bw-dat-97"
+  },
+  "9.9 — Montagem de pinos e chavetas": {
+    "checkbox_geral": "bw-g-98",
+    "checkbox_parcial": "bw-p-98",
+    "executante": "bw-resp-98",
+    "matricula": "bw-mat-98",
+    "data": "bw-dat-98"
+  },
+  "9.10 — Montagem de proteções": {
+    "checkbox_geral": "bw-g-99",
+    "checkbox_parcial": "bw-p-99",
+    "executante": "bw-resp-99",
+    "matricula": "bw-mat-99",
+    "data": "bw-dat-99"
+  },
+  "9.11 — Conexão da hidráulica": {
+    "checkbox_geral": "bw-g-100",
+    "checkbox_parcial": "bw-p-100",
+    "executante": "bw-resp-100",
+    "matricula": "bw-mat-100",
+    "data": "bw-dat-100"
+  },
+  "9.12 — Equalização dos cilindros motriz": {
+    "checkbox_geral": "bw-g-101",
+    "checkbox_parcial": "bw-p-101",
+    "executante": "bw-resp-101",
+    "matricula": "bw-mat-101",
+    "data": "bw-dat-101"
+  },
+  "9.13 — Aferir e Ajustar Gap (255mm)": {
+    "checkbox_geral": "bw-g-102",
+    "checkbox_parcial": "bw-p-102",
+    "executante": "bw-resp-102",
+    "matricula": "bw-mat-102",
+    "data": "bw-dat-102"
+  },
+  "10.1 — Teste e Liberação hidráulica": {
+    "checkbox_geral": "bw-g-103",
+    "checkbox_parcial": "bw-p-103",
+    "executante": "bw-resp-103",
+    "matricula": "bw-mat-103",
+    "data": "bw-dat-103"
+  },
+  "10.2 — Teste e Liberação hidrostática": {
+    "checkbox_geral": "bw-g-104",
+    "checkbox_parcial": "bw-p-104",
+    "executante": "bw-resp-104",
+    "matricula": "bw-mat-104",
+    "data": "bw-dat-104"
+  },
+  "10.3 — Retirar Segmento do Stand": {
+    "checkbox_geral": "bw-g-105",
+    "checkbox_parcial": "bw-p-105",
+    "executante": "bw-resp-105",
+    "matricula": "bw-mat-105",
+    "data": "bw-dat-105"
+  },
+  "10.4 — Montagem de Acoplamentos": {
+    "checkbox_geral": "bw-g-106",
+    "checkbox_parcial": "bw-p-106",
+    "executante": "bw-resp-106",
+    "matricula": "bw-mat-106",
+    "data": "bw-dat-106"
+  },
+  "10.5 — Teste de lubrificação geral": {
+    "checkbox_geral": "bw-g-107",
+    "checkbox_parcial": "bw-p-107",
+    "executante": "bw-resp-107",
+    "matricula": "bw-mat-107",
+    "data": "bw-dat-107"
+  }
+}
