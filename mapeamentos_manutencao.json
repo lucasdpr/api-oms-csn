@@ -1,0 +1,758 @@
+{
+  "1 — Lavagem e/ou Limpeza Mecânica": {
+    "checkbox_geral": "hz-g-0",
+    "checkbox_parcial": "hz-p-0",
+    "executante": "hz-resp-0",
+    "matricula": "hz-mat-0",
+    "data": "hz-dat-0"
+  },
+  "2.1 — Teste Hidrostático": {
+    "checkbox_geral": "hz-g-1",
+    "checkbox_parcial": "hz-p-1",
+    "executante": "hz-resp-1",
+    "matricula": "hz-mat-1",
+    "data": "hz-dat-1"
+  },
+  "2.2 — Teste Hidráulico": {
+    "checkbox_geral": "hz-g-2",
+    "checkbox_parcial": "hz-p-2",
+    "executante": "hz-resp-2",
+    "matricula": "hz-mat-2",
+    "data": "hz-dat-2"
+  },
+  "2.3 — Teste de Refrigeração": {
+    "checkbox_geral": "hz-g-3",
+    "checkbox_parcial": "hz-p-3",
+    "executante": "hz-resp-3",
+    "matricula": "hz-mat-3",
+    "data": "hz-dat-3"
+  },
+  "2.4 — Aferição de Gap (255mm)": {
+    "checkbox_geral": "hz-g-4",
+    "checkbox_parcial": "hz-p-4",
+    "executante": "hz-resp-4",
+    "matricula": "hz-mat-4",
+    "data": "hz-dat-4"
+  },
+  "2.5 — Abrir Segmento": {
+    "checkbox_geral": "hz-g-5",
+    "checkbox_parcial": "hz-p-5",
+    "executante": "hz-resp-5",
+    "matricula": "hz-mat-5",
+    "data": "hz-dat-5"
+  },
+  "3.1 — Desmontagem de proteções": {
+    "checkbox_geral": "hz-g-6",
+    "checkbox_parcial": "hz-p-6",
+    "executante": "hz-resp-6",
+    "matricula": "hz-mat-6",
+    "data": "hz-dat-6"
+  },
+  "3.2 — Retirar chavetas": {
+    "checkbox_geral": "hz-g-7",
+    "checkbox_parcial": "hz-p-7",
+    "executante": "hz-resp-7",
+    "matricula": "hz-mat-7",
+    "data": "hz-dat-7"
+  },
+  "3.3 — Desconectar pinos dos cilindros de elevação": {
+    "checkbox_geral": "hz-g-8",
+    "checkbox_parcial": "hz-p-8",
+    "executante": "hz-resp-8",
+    "matricula": "hz-mat-8",
+    "data": "hz-dat-8"
+  },
+  "3.4 — Retirada da Barra Transversal": {
+    "checkbox_geral": "hz-g-9",
+    "checkbox_parcial": "hz-p-9",
+    "executante": "hz-resp-9",
+    "matricula": "hz-mat-9",
+    "data": "hz-dat-9"
+  },
+  "3.5 — Desconectar flexíveis principais": {
+    "checkbox_geral": "hz-g-10",
+    "checkbox_parcial": "hz-p-10",
+    "executante": "hz-resp-10",
+    "matricula": "hz-mat-10",
+    "data": "hz-dat-10"
+  },
+  "3.6 — Retirar parafusos de fixação das buchas": {
+    "checkbox_geral": "hz-g-11",
+    "checkbox_parcial": "hz-p-11",
+    "executante": "hz-resp-11",
+    "matricula": "hz-mat-11",
+    "data": "hz-dat-11"
+  },
+  "3.7 — Transferir base para stand": {
+    "checkbox_geral": "hz-g-12",
+    "checkbox_parcial": "hz-p-12",
+    "executante": "hz-resp-12",
+    "matricula": "hz-mat-12",
+    "data": "hz-dat-12"
+  },
+  "3.8 — Aferir pass-line Inf. e Sup.": {
+    "checkbox_geral": "hz-g-13",
+    "checkbox_parcial": "hz-p-13",
+    "executante": "hz-resp-13",
+    "matricula": "hz-mat-13",
+    "data": "hz-dat-13"
+  },
+  "3.9 — Retirar cangalhas (Inf. e Sup.)": {
+    "checkbox_geral": "hz-g-14",
+    "checkbox_parcial": "hz-p-14",
+    "executante": "hz-resp-14",
+    "matricula": "hz-mat-14",
+    "data": "hz-dat-14"
+  },
+  "3.10 — Desconectar flexíveis das juntas rotativas": {
+    "checkbox_geral": "hz-g-15",
+    "checkbox_parcial": "hz-p-15",
+    "executante": "hz-resp-15",
+    "matricula": "hz-mat-15",
+    "data": "hz-dat-15"
+  },
+  "3.11 — Retirar proteções de mancal": {
+    "checkbox_geral": "hz-g-16",
+    "checkbox_parcial": "hz-p-16",
+    "executante": "hz-resp-16",
+    "matricula": "hz-mat-16",
+    "data": "hz-dat-16"
+  },
+  "3.12 — Desmontagem dos rolos (Destorquear e soltá-los) inferior": {
+    "checkbox_geral": "hz-g-17",
+    "checkbox_parcial": "hz-p-17",
+    "executante": "hz-resp-17",
+    "matricula": "hz-mat-17",
+    "data": "hz-dat-17"
+  },
+  "3.13 — Desmontagem dos rolos (Destorquear e soltá-los) superior": {
+    "checkbox_geral": "hz-g-18",
+    "checkbox_parcial": "hz-p-18",
+    "executante": "hz-resp-18",
+    "matricula": "hz-mat-18",
+    "data": "hz-dat-18"
+  },
+  "3.14 — Desmontagem da estrutura do rolo acionado": {
+    "checkbox_geral": "hz-g-19",
+    "checkbox_parcial": "hz-p-19",
+    "executante": "hz-resp-19",
+    "matricula": "hz-mat-19",
+    "data": "hz-dat-19"
+  },
+  "3.15 — Retirada dos cilindros motriz": {
+    "checkbox_geral": "hz-g-20",
+    "checkbox_parcial": "hz-p-20",
+    "executante": "hz-resp-20",
+    "matricula": "hz-mat-20",
+    "data": "hz-dat-20"
+  },
+  "3.16 — Desmontagem de buchas e conjuntos na base": {
+    "checkbox_geral": "hz-g-21",
+    "checkbox_parcial": "hz-p-21",
+    "executante": "hz-resp-21",
+    "matricula": "hz-mat-21",
+    "data": "hz-dat-21"
+  },
+  "3.17 — Desmontagem de buchas e conjuntos": {
+    "checkbox_geral": "hz-g-22",
+    "checkbox_parcial": "hz-p-22",
+    "executante": "hz-resp-22",
+    "matricula": "hz-mat-22",
+    "data": "hz-dat-22"
+  },
+  "3.18 — Preparar bases e barra para jateamento e pintura": {
+    "checkbox_geral": "hz-g-23",
+    "checkbox_parcial": "hz-p-23",
+    "executante": "hz-resp-23",
+    "matricula": "hz-mat-23",
+    "data": "hz-dat-23"
+  },
+  "4.1 — Desmontagem de proteções e preparação dos calços e base Inferior": {
+    "checkbox_geral": "hz-g-24",
+    "checkbox_parcial": "hz-p-24",
+    "executante": "hz-resp-24",
+    "matricula": "hz-mat-24",
+    "data": "hz-dat-24"
+  },
+  "4.2 — Troca de oring's": {
+    "checkbox_geral": "hz-g-25",
+    "checkbox_parcial": "hz-p-25",
+    "executante": "hz-resp-25",
+    "matricula": "hz-mat-25",
+    "data": "hz-dat-25"
+  },
+  "4.3 — Montagem de distribuidores": {
+    "checkbox_geral": "hz-g-26",
+    "checkbox_parcial": "hz-p-26",
+    "executante": "hz-resp-26",
+    "matricula": "hz-mat-26",
+    "data": "hz-dat-26"
+  },
+  "4.4 — Fixação dos distribuidores na base": {
+    "checkbox_geral": "hz-g-27",
+    "checkbox_parcial": "hz-p-27",
+    "executante": "hz-resp-27",
+    "matricula": "hz-mat-27",
+    "data": "hz-dat-27"
+  },
+  "4.5 — Desobstrução das tubulações de graxa e de refrigeração": {
+    "checkbox_geral": "hz-g-28",
+    "checkbox_parcial": "hz-p-28",
+    "executante": "hz-resp-28",
+    "matricula": "hz-mat-28",
+    "data": "hz-dat-28"
+  },
+  "4.6 — Preparação dos Rolos": {
+    "checkbox_geral": "hz-g-29",
+    "checkbox_parcial": "hz-p-29",
+    "executante": "hz-resp-29",
+    "matricula": "hz-mat-29",
+    "data": "hz-dat-29"
+  },
+  "4.7 — Montagem de flexíveis na base": {
+    "checkbox_geral": "hz-g-30",
+    "checkbox_parcial": "hz-p-30",
+    "executante": "hz-resp-30",
+    "matricula": "hz-mat-30",
+    "data": "hz-dat-30"
+  },
+  "4.8 — Preparação de pés e tulipas": {
+    "checkbox_geral": "hz-g-31",
+    "checkbox_parcial": "hz-p-31",
+    "executante": "hz-resp-31",
+    "matricula": "hz-mat-31",
+    "data": "hz-dat-31"
+  },
+  "4.9 — Montagem de rolos na base": {
+    "checkbox_geral": "hz-g-32",
+    "checkbox_parcial": "hz-p-32",
+    "executante": "hz-resp-32",
+    "matricula": "hz-mat-32",
+    "data": "hz-dat-32"
+  },
+  "4.10 — Torque dos parafusos dos mancais": {
+    "checkbox_geral": "hz-g-33",
+    "checkbox_parcial": "hz-p-33",
+    "executante": "hz-resp-33",
+    "matricula": "hz-mat-33",
+    "data": "hz-dat-33"
+  },
+  "4.11 — Regulagem dos distribuidores": {
+    "checkbox_geral": "hz-g-34",
+    "checkbox_parcial": "hz-p-34",
+    "executante": "hz-resp-34",
+    "matricula": "hz-mat-34",
+    "data": "hz-dat-34"
+  },
+  "4.12 — Teste de Lubrificação": {
+    "checkbox_geral": "hz-g-35",
+    "checkbox_parcial": "hz-p-35",
+    "executante": "hz-resp-35",
+    "matricula": "hz-mat-35",
+    "data": "hz-dat-35"
+  },
+  "4.13 — Fixação dos distribuidores na base": {
+    "checkbox_geral": "hz-g-36",
+    "checkbox_parcial": "hz-p-36",
+    "executante": "hz-resp-36",
+    "matricula": "hz-mat-36",
+    "data": "hz-dat-36"
+  },
+  "4.14 — Preparar hastes": {
+    "checkbox_geral": "hz-g-37",
+    "checkbox_parcial": "hz-p-37",
+    "executante": "hz-resp-37",
+    "matricula": "hz-mat-37",
+    "data": "hz-dat-37"
+  },
+  "4.15 — Preparar e montar conjuntos de ajustes e buchas": {
+    "checkbox_geral": "hz-g-38",
+    "checkbox_parcial": "hz-p-38",
+    "executante": "hz-resp-38",
+    "matricula": "hz-mat-38",
+    "data": "hz-dat-38"
+  },
+  "4.16 — Montagem das buchas e conjuntos na base": {
+    "checkbox_geral": "hz-g-39",
+    "checkbox_parcial": "hz-p-39",
+    "executante": "hz-resp-39",
+    "matricula": "hz-mat-39",
+    "data": "hz-dat-39"
+  },
+  "4.17 — Montagem dos flexíveis principais": {
+    "checkbox_geral": "hz-g-40",
+    "checkbox_parcial": "hz-p-40",
+    "executante": "hz-resp-40",
+    "matricula": "hz-mat-40",
+    "data": "hz-dat-40"
+  },
+  "4.18 — Conectar flexíveis de juntas nos rolos": {
+    "checkbox_geral": "hz-g-41",
+    "checkbox_parcial": "hz-p-41",
+    "executante": "hz-resp-41",
+    "matricula": "hz-mat-41",
+    "data": "hz-dat-41"
+  },
+  "4.19 — Teste hidrostático juntas rotativas": {
+    "checkbox_geral": "hz-g-42",
+    "checkbox_parcial": "hz-p-42",
+    "executante": "hz-resp-42",
+    "matricula": "hz-mat-42",
+    "data": "hz-dat-42"
+  },
+  "4.20 — Teste hidrostático Mancal": {
+    "checkbox_geral": "hz-g-43",
+    "checkbox_parcial": "hz-p-43",
+    "executante": "hz-resp-43",
+    "matricula": "hz-mat-43",
+    "data": "hz-dat-43"
+  },
+  "4.21 — Aferir Pass-Line e Ajustar": {
+    "checkbox_geral": "hz-g-44",
+    "checkbox_parcial": "hz-p-44",
+    "executante": "hz-resp-44",
+    "matricula": "hz-mat-44",
+    "data": "hz-dat-44"
+  },
+  "4.22 — Montagem e alinhamento das cangalhas": {
+    "checkbox_geral": "hz-g-45",
+    "checkbox_parcial": "hz-p-45",
+    "executante": "hz-resp-45",
+    "matricula": "hz-mat-45",
+    "data": "hz-dat-45"
+  },
+  "5.1 — Desmontar todos os bicos": {
+    "checkbox_geral": "hz-g-46",
+    "checkbox_parcial": "hz-p-46",
+    "executante": "hz-resp-46",
+    "matricula": "hz-mat-46",
+    "data": "hz-dat-46"
+  },
+  "5.2 — Realizar Limpeza das tubulações": {
+    "checkbox_geral": "hz-g-47",
+    "checkbox_parcial": "hz-p-47",
+    "executante": "hz-resp-47",
+    "matricula": "hz-mat-47",
+    "data": "hz-dat-47"
+  },
+  "5.3 — Montar os bicos e flexíveis": {
+    "checkbox_geral": "hz-g-48",
+    "checkbox_parcial": "hz-p-48",
+    "executante": "hz-resp-48",
+    "matricula": "hz-mat-48",
+    "data": "hz-dat-48"
+  },
+  "5.4 — Realizar teste": {
+    "checkbox_geral": "hz-g-49",
+    "checkbox_parcial": "hz-p-49",
+    "executante": "hz-resp-49",
+    "matricula": "hz-mat-49",
+    "data": "hz-dat-49"
+  },
+  "6.1 — Preparação de Lines ou troca": {
+    "checkbox_geral": "hz-g-50",
+    "checkbox_parcial": "hz-p-50",
+    "executante": "hz-resp-50",
+    "matricula": "hz-mat-50",
+    "data": "hz-dat-50"
+  },
+  "6.2 — Preparação dos calços e apoios": {
+    "checkbox_geral": "hz-g-51",
+    "checkbox_parcial": "hz-p-51",
+    "executante": "hz-resp-51",
+    "matricula": "hz-mat-51",
+    "data": "hz-dat-51"
+  },
+  "6.3 — Troca de oring's": {
+    "checkbox_geral": "hz-g-52",
+    "checkbox_parcial": "hz-p-52",
+    "executante": "hz-resp-52",
+    "matricula": "hz-mat-52",
+    "data": "hz-dat-52"
+  },
+  "6.4 — Desobstrução de tubulações de graxa e de refrigeração": {
+    "checkbox_geral": "hz-g-53",
+    "checkbox_parcial": "hz-p-53",
+    "executante": "hz-resp-53",
+    "matricula": "hz-mat-53",
+    "data": "hz-dat-53"
+  },
+  "6.5 — Montagem de proteções das tubulações e de stauff": {
+    "checkbox_geral": "hz-g-54",
+    "checkbox_parcial": "hz-p-54",
+    "executante": "hz-resp-54",
+    "matricula": "hz-mat-54",
+    "data": "hz-dat-54"
+  },
+  "6.6 — Verificar roscas dos parafusos M30": {
+    "checkbox_geral": "hz-g-55",
+    "checkbox_parcial": "hz-p-55",
+    "executante": "hz-resp-55",
+    "matricula": "hz-mat-55",
+    "data": "hz-dat-55"
+  },
+  "6.7 — Montagem do rolo motriz": {
+    "checkbox_geral": "hz-g-56",
+    "checkbox_parcial": "hz-p-56",
+    "executante": "hz-resp-56",
+    "matricula": "hz-mat-56",
+    "data": "hz-dat-56"
+  },
+  "7.1 — Preparação para receber estrutura e cilindros (Lines e mancais)": {
+    "checkbox_geral": "hz-g-57",
+    "checkbox_parcial": "hz-p-57",
+    "executante": "hz-resp-57",
+    "matricula": "hz-mat-57",
+    "data": "hz-dat-57"
+  },
+  "7.2 — Montagem de Cilindros Motriz": {
+    "checkbox_geral": "hz-g-58",
+    "checkbox_parcial": "hz-p-58",
+    "executante": "hz-resp-58",
+    "matricula": "hz-mat-58",
+    "data": "hz-dat-58"
+  },
+  "7.3 — Desmontagem de proteções e preparação dos calços e base Superior": {
+    "checkbox_geral": "hz-g-59",
+    "checkbox_parcial": "hz-p-59",
+    "executante": "hz-resp-59",
+    "matricula": "hz-mat-59",
+    "data": "hz-dat-59"
+  },
+  "7.4 — Troca de oring's": {
+    "checkbox_geral": "hz-g-60",
+    "checkbox_parcial": "hz-p-60",
+    "executante": "hz-resp-60",
+    "matricula": "hz-mat-60",
+    "data": "hz-dat-60"
+  },
+  "7.5 — Desobstruição das tubulações de graxa e de refrigeração": {
+    "checkbox_geral": "hz-g-61",
+    "checkbox_parcial": "hz-p-61",
+    "executante": "hz-resp-61",
+    "matricula": "hz-mat-61",
+    "data": "hz-dat-61"
+  },
+  "7.6 — Preparação dos Rolos": {
+    "checkbox_geral": "hz-g-62",
+    "checkbox_parcial": "hz-p-62",
+    "executante": "hz-resp-62",
+    "matricula": "hz-mat-62",
+    "data": "hz-dat-62"
+  },
+  "7.7 — Troca de parafusos dos calços de alinhamento pass-line": {
+    "checkbox_geral": "hz-g-63",
+    "checkbox_parcial": "hz-p-63",
+    "executante": "hz-resp-63",
+    "matricula": "hz-mat-63",
+    "data": "hz-dat-63"
+  },
+  "7.8 — Montagem de rolos na base": {
+    "checkbox_geral": "hz-g-64",
+    "checkbox_parcial": "hz-p-64",
+    "executante": "hz-resp-64",
+    "matricula": "hz-mat-64",
+    "data": "hz-dat-64"
+  },
+  "7.9 — Aperto de parafusos nos mancais": {
+    "checkbox_geral": "hz-g-65",
+    "checkbox_parcial": "hz-p-65",
+    "executante": "hz-resp-65",
+    "matricula": "hz-mat-65",
+    "data": "hz-dat-65"
+  },
+  "7.10 — Montagem da estrutura": {
+    "checkbox_geral": "hz-g-66",
+    "checkbox_parcial": "hz-p-66",
+    "executante": "hz-resp-66",
+    "matricula": "hz-mat-66",
+    "data": "hz-dat-66"
+  },
+  "7.11 — Montagem de distribuidores": {
+    "checkbox_geral": "hz-g-67",
+    "checkbox_parcial": "hz-p-67",
+    "executante": "hz-resp-67",
+    "matricula": "hz-mat-67",
+    "data": "hz-dat-67"
+  },
+  "7.12 — Regulagem dos distribuidores": {
+    "checkbox_geral": "hz-g-68",
+    "checkbox_parcial": "hz-p-68",
+    "executante": "hz-resp-68",
+    "matricula": "hz-mat-68",
+    "data": "hz-dat-68"
+  },
+  "7.13 — Teste de Lubrificação": {
+    "checkbox_geral": "hz-g-69",
+    "checkbox_parcial": "hz-p-69",
+    "executante": "hz-resp-69",
+    "matricula": "hz-mat-69",
+    "data": "hz-dat-69"
+  },
+  "7.14 — Fixação dos distribuidores na base": {
+    "checkbox_geral": "hz-g-70",
+    "checkbox_parcial": "hz-p-70",
+    "executante": "hz-resp-70",
+    "matricula": "hz-mat-70",
+    "data": "hz-dat-70"
+  },
+  "7.15 — Montagem de proteções dos mancais": {
+    "checkbox_geral": "hz-g-71",
+    "checkbox_parcial": "hz-p-71",
+    "executante": "hz-resp-71",
+    "matricula": "hz-mat-71",
+    "data": "hz-dat-71"
+  },
+  "7.16 — Realização do teste hidrostático da base": {
+    "checkbox_geral": "hz-g-72",
+    "checkbox_parcial": "hz-p-72",
+    "executante": "hz-resp-72",
+    "matricula": "hz-mat-72",
+    "data": "hz-dat-72"
+  },
+  "7.17 — Virar a base": {
+    "checkbox_geral": "hz-g-73",
+    "checkbox_parcial": "hz-p-73",
+    "executante": "hz-resp-73",
+    "matricula": "hz-mat-73",
+    "data": "hz-dat-73"
+  },
+  "7.18 — Torque dos parafusos dos mancais": {
+    "checkbox_geral": "hz-g-74",
+    "checkbox_parcial": "hz-p-74",
+    "executante": "hz-resp-74",
+    "matricula": "hz-mat-74",
+    "data": "hz-dat-74"
+  },
+  "7.19 — Montagem de flexíveis de junta rotativa": {
+    "checkbox_geral": "hz-g-75",
+    "checkbox_parcial": "hz-p-75",
+    "executante": "hz-resp-75",
+    "matricula": "hz-mat-75",
+    "data": "hz-dat-75"
+  },
+  "7.20 — Aferir e ajustar pass-line": {
+    "checkbox_geral": "hz-g-76",
+    "checkbox_parcial": "hz-p-76",
+    "executante": "hz-resp-76",
+    "matricula": "hz-mat-76",
+    "data": "hz-dat-76"
+  },
+  "7.21 — Troca das válvulas dos cilindros": {
+    "checkbox_geral": "hz-g-77",
+    "checkbox_parcial": "hz-p-77",
+    "executante": "hz-resp-77",
+    "matricula": "hz-mat-77",
+    "data": "hz-dat-77"
+  },
+  "7.22 — Troca dos mangotes hidráulicos dos cilindros": {
+    "checkbox_geral": "hz-g-78",
+    "checkbox_parcial": "hz-p-78",
+    "executante": "hz-resp-78",
+    "matricula": "hz-mat-78",
+    "data": "hz-dat-78"
+  },
+  "7.23 — Montagem de proteções sanfonadas": {
+    "checkbox_geral": "hz-g-79",
+    "checkbox_parcial": "hz-p-79",
+    "executante": "hz-resp-79",
+    "matricula": "hz-mat-79",
+    "data": "hz-dat-79"
+  },
+  "7.24 — Substituição dos engates rápidos (hidráulicos)": {
+    "checkbox_geral": "hz-g-80",
+    "checkbox_parcial": "hz-p-80",
+    "executante": "hz-resp-80",
+    "matricula": "hz-mat-80",
+    "data": "hz-dat-80"
+  },
+  "7.25 — Substituição dos engates rápidos (refrigeração)": {
+    "checkbox_geral": "hz-g-81",
+    "checkbox_parcial": "hz-p-81",
+    "executante": "hz-resp-81",
+    "matricula": "hz-mat-81",
+    "data": "hz-dat-81"
+  },
+  "7.26 — Montagem de cangalhas na base": {
+    "checkbox_geral": "hz-g-82",
+    "checkbox_parcial": "hz-p-82",
+    "executante": "hz-resp-82",
+    "matricula": "hz-mat-82",
+    "data": "hz-dat-82"
+  },
+  "8.1 — Troca de cilindros de elevação": {
+    "checkbox_geral": "hz-g-83",
+    "checkbox_parcial": "hz-p-83",
+    "executante": "hz-resp-83",
+    "matricula": "hz-mat-83",
+    "data": "hz-dat-83"
+  },
+  "8.2 — Troca de cilindros clamp": {
+    "checkbox_geral": "hz-g-84",
+    "checkbox_parcial": "hz-p-84",
+    "executante": "hz-resp-84",
+    "matricula": "hz-mat-84",
+    "data": "hz-dat-84"
+  },
+  "8.3 — Montagem de blocos nos cilindros clamp": {
+    "checkbox_geral": "hz-g-85",
+    "checkbox_parcial": "hz-p-85",
+    "executante": "hz-resp-85",
+    "matricula": "hz-mat-85",
+    "data": "hz-dat-85"
+  },
+  "8.4 — Troca de oring's (completo)": {
+    "checkbox_geral": "hz-g-86",
+    "checkbox_parcial": "hz-p-86",
+    "executante": "hz-resp-86",
+    "matricula": "hz-mat-86",
+    "data": "hz-dat-86"
+  },
+  "8.5 — Aperto de tubulações (Conferir)": {
+    "checkbox_geral": "hz-g-87",
+    "checkbox_parcial": "hz-p-87",
+    "executante": "hz-resp-87",
+    "matricula": "hz-mat-87",
+    "data": "hz-dat-87"
+  },
+  "8.6 — Montagem de mangotes dos cilindros de elevação": {
+    "checkbox_geral": "hz-g-88",
+    "checkbox_parcial": "hz-p-88",
+    "executante": "hz-resp-88",
+    "matricula": "hz-mat-88",
+    "data": "hz-dat-88"
+  },
+  "8.7 — Teste hidráulico da barra": {
+    "checkbox_geral": "hz-g-89",
+    "checkbox_parcial": "hz-p-89",
+    "executante": "hz-resp-89",
+    "matricula": "hz-mat-89",
+    "data": "hz-dat-89"
+  },
+  "9.1 — Movimentar base sup para inf": {
+    "checkbox_geral": "hz-g-90",
+    "checkbox_parcial": "hz-p-90",
+    "executante": "hz-resp-90",
+    "matricula": "hz-mat-90",
+    "data": "hz-dat-90"
+  },
+  "9.2 — Conectar flexíveis principais (graxa e água)": {
+    "checkbox_geral": "hz-g-91",
+    "checkbox_parcial": "hz-p-91",
+    "executante": "hz-resp-91",
+    "matricula": "hz-mat-91",
+    "data": "hz-dat-91"
+  },
+  "9.3 — Montar parafusos das buchas": {
+    "checkbox_geral": "hz-g-92",
+    "checkbox_parcial": "hz-p-92",
+    "executante": "hz-resp-92",
+    "matricula": "hz-mat-92",
+    "data": "hz-dat-92"
+  },
+  "9.4 — Preparação das hastes para receber a barra": {
+    "checkbox_geral": "hz-g-93",
+    "checkbox_parcial": "hz-p-93",
+    "executante": "hz-resp-93",
+    "matricula": "hz-mat-93",
+    "data": "hz-dat-93"
+  },
+  "9.5 — Alinhamento de cangalha superior": {
+    "checkbox_geral": "hz-g-94",
+    "checkbox_parcial": "hz-p-94",
+    "executante": "hz-resp-94",
+    "matricula": "hz-mat-94",
+    "data": "hz-dat-94"
+  },
+  "9.6 — Teste geral de juntas": {
+    "checkbox_geral": "hz-g-95",
+    "checkbox_parcial": "hz-p-95",
+    "executante": "hz-resp-95",
+    "matricula": "hz-mat-95",
+    "data": "hz-dat-95"
+  },
+  "9.7 — Montagem da barra transversal no segmento": {
+    "checkbox_geral": "hz-g-96",
+    "checkbox_parcial": "hz-p-96",
+    "executante": "hz-resp-96",
+    "matricula": "hz-mat-96",
+    "data": "hz-dat-96"
+  },
+  "9.8 — Aperto de parafusos dos cilindros clamp": {
+    "checkbox_geral": "hz-g-97",
+    "checkbox_parcial": "hz-p-97",
+    "executante": "hz-resp-97",
+    "matricula": "hz-mat-97",
+    "data": "hz-dat-97"
+  },
+  "9.9 — Montagem de pinos e chavetas": {
+    "checkbox_geral": "hz-g-98",
+    "checkbox_parcial": "hz-p-98",
+    "executante": "hz-resp-98",
+    "matricula": "hz-mat-98",
+    "data": "hz-dat-98"
+  },
+  "9.10 — Montagem de proteções": {
+    "checkbox_geral": "hz-g-99",
+    "checkbox_parcial": "hz-p-99",
+    "executante": "hz-resp-99",
+    "matricula": "hz-mat-99",
+    "data": "hz-dat-99"
+  },
+  "9.11 — Conexão da hidráulica": {
+    "checkbox_geral": "hz-g-100",
+    "checkbox_parcial": "hz-p-100",
+    "executante": "hz-resp-100",
+    "matricula": "hz-mat-100",
+    "data": "hz-dat-100"
+  },
+  "9.12 — Equalização dos cilindros motriz": {
+    "checkbox_geral": "hz-g-101",
+    "checkbox_parcial": "hz-p-101",
+    "executante": "hz-resp-101",
+    "matricula": "hz-mat-101",
+    "data": "hz-dat-101"
+  },
+  "9.13 — Aferir e Ajustar Gap (255mm)": {
+    "checkbox_geral": "hz-g-102",
+    "checkbox_parcial": "hz-p-102",
+    "executante": "hz-resp-102",
+    "matricula": "hz-mat-102",
+    "data": "hz-dat-102"
+  },
+  "10.1 — Teste e Liberação hidráulica": {
+    "checkbox_geral": "hz-g-103",
+    "checkbox_parcial": "hz-p-103",
+    "executante": "hz-resp-103",
+    "matricula": "hz-mat-103",
+    "data": "hz-dat-103"
+  },
+  "10.2 — Teste e Liberação hidrostática": {
+    "checkbox_geral": "hz-g-104",
+    "checkbox_parcial": "hz-p-104",
+    "executante": "hz-resp-104",
+    "matricula": "hz-mat-104",
+    "data": "hz-dat-104"
+  },
+  "10.3 — Retirar Segmento do Stand": {
+    "checkbox_geral": "hz-g-105",
+    "checkbox_parcial": "hz-p-105",
+    "executante": "hz-resp-105",
+    "matricula": "hz-mat-105",
+    "data": "hz-dat-105"
+  },
+  "10.4 — Montagem de Acoplamentos": {
+    "checkbox_geral": "hz-g-106",
+    "checkbox_parcial": "hz-p-106",
+    "executante": "hz-resp-106",
+    "matricula": "hz-mat-106",
+    "data": "hz-dat-106"
+  },
+  "10.5 — Teste de lubrificação geral": {
+    "checkbox_geral": "hz-g-107",
+    "checkbox_parcial": "hz-p-107",
+    "executante": "hz-resp-107",
+    "matricula": "hz-mat-107",
+    "data": "hz-dat-107"
+  }
+}
