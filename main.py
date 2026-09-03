@@ -3376,13 +3376,22 @@ def marcar_etapa_checklist_execucao(dados: ChecklistExecucaoMarcar):
         # o próprio fim do reparo, já tratado pelo fluxo de "Concluir".
         #
         # Só se aplica a tipos de equipamento que separam fase
-        # (chegada/manutencao/saida) de especialidade — hoje Molde MCC4
-        # e Molde MCC2/3. Nos outros tipos "area" já É a especialidade,
-        # então uma "fase" com várias especialidades dentro não existe.
+        # (chegada/manutencao/saida) de especialidade. Nos outros tipos
+        # "area" já É a especialidade, então uma "fase" com várias
+        # especialidades dentro não existe.
         # 🆕 Precisa bater com CHECKLIST_EXECUCAO_SECOES_POR_TIPO do
         # front (JS/Core/dados.js) — qualquer tipo novo que ganhar essa
-        # divisão por fase entra nos dois lugares.
-        TIPOS_CHECKLIST_POR_FASE = {"molde-mcc4", "molde-mcc2-3", "horizontal-mcc4"}
+        # divisão por fase entra nos dois lugares. Faltavam aqui:
+        # bow-mcc4, straightener-r1/r2-mcc4, bender-mcc4,
+        # segmento-zero-mcc2-3, cadeira-mcc2-3, segmento-grupo-mcc2-3 —
+        # cadastrados no front mas nunca propagados pra cá, então essas
+        # áreas nunca disparavam o aviso de "fase completa" pra
+        # Mecânica/Elétrica/Hidráulica.
+        TIPOS_CHECKLIST_POR_FASE = {
+            "molde-mcc4", "molde-mcc2-3", "horizontal-mcc4", "bow-mcc4",
+            "straightener-r1-mcc4", "straightener-r2-mcc4", "bender-mcc4",
+            "segmento-zero-mcc2-3", "cadeira-mcc2-3", "segmento-grupo-mcc2-3",
+        }
         PROXIMA_FASE_APOS = {"chegada": "Manutenção", "manutencao": "Saída"}
         if dados.marcado:
             cursor.execute("SELECT area FROM checklist_execucao_etapas WHERE id = %s", (dados.etapa_id,))
