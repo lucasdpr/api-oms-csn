@@ -539,6 +539,22 @@ def init_db():
             )
         ''')
 
+        # 🆕 Controle de "lido/não lido" da Central de Notificações — POR
+        # PESSOA. Um evento (ocorrência, OS, achado...) é identificado por
+        # (tipo, evento_id) — tipo distingue as tabelas de origem, já que
+        # os IDs numéricos se repetem entre elas (ocorrência #5 e OS #5
+        # são coisas diferentes). Cada matrícula tem sua própria linha:
+        # o ADM marcar como visto NÃO afeta o que outra pessoa já viu.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS notificacoes_lidas (
+                tipo TEXT NOT NULL,
+                evento_id TEXT NOT NULL,
+                matricula TEXT NOT NULL,
+                lido_em TEXT NOT NULL,
+                PRIMARY KEY (tipo, evento_id, matricula)
+            )
+        ''')
+
         # 📸 Fotos anexadas a registros/intervenções em equipamentos.
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS fotos_registro (
@@ -1171,7 +1187,7 @@ def _disparar_push_para_inscricoes(inscricoes, titulo: str, corpo: str, url: str
             conn.commit()
 
 
-def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str = "/"):
+def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str = "/app.html#notificacoes"):
     if not PUSH_HABILITADO:
         return
     try:
@@ -1206,7 +1222,7 @@ def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str
 # área Recusa ou coloca "Aguardando" numa atividade: quem PEDIU (o
 # técnico do Checklist de Execução, via solicitante_matricula) precisa
 # saber o motivo, não a área inteira de novo.
-def enviar_push_para_matricula(matricula: str, titulo: str, corpo: str, url: str = "/"):
+def enviar_push_para_matricula(matricula: str, titulo: str, corpo: str, url: str = "/app.html#notificacoes"):
     if not PUSH_HABILITADO or not matricula:
         return
     try:
@@ -1333,6 +1349,11 @@ class PushSubscribe(BaseModel):
 
 class PushUnsubscribe(BaseModel):
     endpoint: str
+
+class NotificacaoMarcarLida(BaseModel):
+    tipo: str       # "evento" | "os" | "achado"
+    evento_id: str
+    matricula: str
 
 class RegistroComFoto(BaseModel):
     peca_id: str
@@ -2395,6 +2416,78 @@ def finalizar_rascunho_folhao(dados: FolhaoRascunhoFinalizar):
         )
         conn.commit()
 
+    return {"sucesso": True}
+
+
+@app.get("/api/notificacoes/feed", tags=["Notificações Push"], summary="Feed unificado da Central de Notificações (com lido/não-lido por matrícula)")
+def get_notificacoes_feed(matricula: str, limite: int = 30):
+    """Junta os eventos gerais da Auditoria (log_eventos — inclui coisas
+    como "rolo travado" no Sinótico 3D, que não têm categoria de
+    Ocorrência e por isso nunca apareciam na Central de Notificações),
+    OS em aberto e achados de Qualidade pendentes, num feed só,
+    marcando pra CADA MATRÍCULA o que ela já viu ou não — ver/marcar
+    como lido é individual: um ADM ver não marca como visto pra
+    ninguém além dele mesmo."""
+    matricula = matricula.strip().upper()
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT 'evento' AS tipo, e.id::text AS evento_id, e.area, e.peca_id AS referencia,
+                   e.acao AS descricao, e.operador AS autor, e.data_hora,
+                   (l.matricula IS NOT NULL) AS lida
+            FROM log_eventos e
+            LEFT JOIN notificacoes_lidas l
+                ON l.tipo = 'evento' AND l.evento_id = e.id::text AND l.matricula = %s
+            ORDER BY e.id DESC
+            LIMIT %s
+        """, (matricula, limite))
+        eventos = cursor.fetchall()
+
+        cursor.execute("""
+            SELECT 'os' AS tipo, o.id::text AS evento_id, o.area, COALESCE(o.numero_os, o.id::text) AS referencia,
+                   COALESCE(o.descricao, 'OS sem descrição') AS descricao, o.criado_por AS autor, o.criado_em AS data_hora,
+                   (l.matricula IS NOT NULL) AS lida
+            FROM ordens_servico o
+            LEFT JOIN notificacoes_lidas l
+                ON l.tipo = 'os' AND l.evento_id = o.id::text AND l.matricula = %s
+            WHERE o.status != 'Concluído'
+            ORDER BY o.id DESC
+            LIMIT %s
+        """, (matricula, limite))
+        ordens = cursor.fetchall()
+
+        cursor.execute("""
+            SELECT 'achado' AS tipo, a.id::text AS evento_id, NULL AS area, r.peca_id AS referencia,
+                   a.descricao, a.criado_por AS autor, a.criado_em AS data_hora,
+                   (l.matricula IS NOT NULL) AS lida
+            FROM qualidade_achados a
+            JOIN qualidade_registros r ON r.id = a.registro_id
+            LEFT JOIN notificacoes_lidas l
+                ON l.tipo = 'achado' AND l.evento_id = a.id::text AND l.matricula = %s
+            WHERE a.status = 'Pendente'
+            ORDER BY a.id DESC
+            LIMIT %s
+        """, (matricula, limite))
+        achados = cursor.fetchall()
+
+    todos = list(eventos) + list(ordens) + list(achados)
+    todos.sort(key=lambda x: x["data_hora"] or "", reverse=True)
+    return todos[:limite]
+
+
+@app.post("/api/notificacoes/marcar_lido", tags=["Notificações Push"], summary="Marcar uma notificação do feed como lida por uma matrícula")
+def marcar_notificacao_lida(dados: NotificacaoMarcarLida):
+    matricula = dados.matricula.strip().upper()
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO notificacoes_lidas (tipo, evento_id, matricula, lido_em)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (tipo, evento_id, matricula) DO NOTHING
+        """, (dados.tipo, dados.evento_id, matricula, agora))
+        conn.commit()
     return {"sucesso": True}
 
 
