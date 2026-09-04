@@ -2210,6 +2210,8 @@ def ajustar_material(dados: MaterialAjuste):
         if material["qtd"] + dados.fator < 0:
             raise HTTPException(status_code=400, detail="O estoque não pode ficar negativo.")
 
+        qtd_anterior = material["qtd"]
+
         cursor.execute(
             "UPDATE materiais SET qtd = qtd + %s WHERE codigo = %s",
             (dados.fator, codigo)
@@ -2217,6 +2219,16 @@ def ajustar_material(dados: MaterialAjuste):
         cursor.execute("SELECT codigo, descricao, qtd, local, valor_unit FROM materiais WHERE codigo = %s", (codigo,))
         atualizado = cursor.fetchone()
         conn.commit()
+
+    # 🆕 Estoque zerando não avisava ninguém — só se percebia abrindo o
+    # Almoxarifado manualmente. Notifica só na transição pra zero (não
+    # dispara de novo a cada ajuste feito enquanto já está zerado).
+    if qtd_anterior > 0 and atualizado["qtd"] <= 0:
+        enviar_push_para_area(
+            titulo="📦 Estoque zerado",
+            corpo=f"{atualizado['descricao']} ({codigo}) chegou a zero no Almoxarifado.",
+            area="Ambos"
+        )
 
     return {"sucesso": True, "material": atualizado}
 
@@ -3877,8 +3889,9 @@ def criar_achado_qualidade(dados: QualidadeAchadoCriar):
     agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id FROM qualidade_registros WHERE id = %s", (dados.registro_id,))
-        if not cursor.fetchone():
+        cursor.execute("SELECT peca_id FROM qualidade_registros WHERE id = %s", (dados.registro_id,))
+        registro = cursor.fetchone()
+        if not registro:
             raise HTTPException(status_code=404, detail="Registro de qualidade não encontrado.")
 
         cursor.execute(
@@ -3898,6 +3911,16 @@ def criar_achado_qualidade(dados: QualidadeAchadoCriar):
             )
 
         conn.commit()
+
+    # 🆕 Achado de Qualidade era o único evento "problema encontrado" do
+    # sistema que não avisava ninguém — a única forma de saber era abrir
+    # o registro manualmente. Agora avisa como os demais eventos críticos
+    # (área "Ambos": não tem área da oficina associada, só os admins).
+    enviar_push_para_area(
+        titulo="🔍 Achado de Qualidade",
+        corpo=f"{dados.operador} — {registro['peca_id']}: {dados.descricao.strip()}",
+        area="Ambos"
+    )
 
     return {"sucesso": True, "id": achado_id}
 
