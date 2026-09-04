@@ -1149,7 +1149,17 @@ def _disparar_push_para_inscricoes(inscricoes, titulo: str, corpo: str, url: str
             if e.response is not None and e.response.status_code in (404, 410):
                 endpoints_mortos.append(inscricao["endpoint"])
             else:
-                print(f"⚠️ Erro ao enviar push: {e}")
+                # 🔧 DIAGNÓSTICO TEMPORÁRIO: todo push vinha falhando com
+                # "400 Bad Request" sem detalhe nenhum (str(e) não traz o
+                # corpo da resposta do serviço de push) — impossível saber
+                # se é chave VAPID errada, payload, ou outra coisa sem ver
+                # o texto de verdade que o serviço respondeu.
+                corpo_erro = None
+                try:
+                    corpo_erro = e.response.text if e.response is not None else None
+                except Exception:
+                    pass
+                print(f"⚠️ Erro ao enviar push: {e} | status={getattr(e.response, 'status_code', '?')} | corpo={corpo_erro} | endpoint={inscricao['endpoint'][:60]}...")
 
     if endpoints_mortos:
         with get_db() as conn:
