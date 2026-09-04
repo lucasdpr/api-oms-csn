@@ -103,7 +103,14 @@ if not PUSH_HABILITADO:
 
 db_pool = psycopg2_pool.ThreadedConnectionPool(
     minconn=1,
-    maxconn=10,
+    # 🔧 CORREÇÃO ("connection pool exhausted" causando 500 em
+    # /api/oficina/atividades no meio de uma rajada de requisições —
+    # app.html dispara várias chamadas em paralelo ao carregar, ex: um
+    # status/laudo por equipamento): 10 conexões simultâneas era pouco
+    # pra esse padrão de uso. psycopg2.pool não espera por uma conexão
+    # livre — se estourar o limite, falha na hora (é isso que virava
+    # 500). Subido pra 20, com folga pro pico de carregamento.
+    maxconn=20,
     dsn=DATABASE_URL,
     cursor_factory=RealDictCursor,
     connect_timeout=20,
