@@ -2449,6 +2449,16 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
     with get_db() as conn:
         cursor = conn.cursor()
 
+        # 🔧 CORREÇÃO ("não foi isso que pedi"): a primeira versão trazia
+        # TODO log_eventos (menos login/logout) — inclui coisas como
+        # "Peça cadastrada no Estoque Reserva", apontamento, troca de
+        # peça... puro ruído de auditoria, não notificação de verdade.
+        # Restrito a `categoria IS NOT NULL` = só Ocorrência de verdade
+        # (Intervenção/Melhoria/Comentário/Atividade Pendente, criadas em
+        # /api/registro_com_foto) — mesmo filtro que /api/registros_
+        # ocorrencia sempre usou. Eventos de Auditoria geral (rolo
+        # travado incluso) ficam de fora da Central por decisão do
+        # usuário — continuam só na Auditoria/Registro Recente.
         cursor.execute("""
             SELECT 'evento' AS tipo, e.id::text AS evento_id, e.area, e.peca_id AS referencia,
                    e.acao AS descricao, e.operador AS autor, e.data_hora,
@@ -2456,10 +2466,10 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
             FROM log_eventos e
             LEFT JOIN notificacoes_lidas l
                 ON l.tipo = 'evento' AND l.evento_id = e.id::text AND l.matricula = %s
-            WHERE e.peca_id != ALL(%s)
+            WHERE e.categoria IS NOT NULL
             ORDER BY e.id DESC
             LIMIT %s
-        """, (matricula, list(TAGS_AUDITORIA_SEM_NOTIFICACAO), limite))
+        """, (matricula, limite))
         eventos = cursor.fetchall()
 
         cursor.execute("""
