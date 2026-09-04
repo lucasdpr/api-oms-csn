@@ -466,6 +466,11 @@ def init_db():
         # 📸 Categoria do registro (Melhoria, Intervenção, Comentário,
         # Atividade Pendente). Guardada direto em log_eventos.
         cursor.execute('''ALTER TABLE log_eventos ADD COLUMN IF NOT EXISTS categoria TEXT''')
+        # 🆕 Área da oficina onde a ocorrência aconteceu (mesma chave de
+        # AREAS_OFICINA no front-end, ex: "hidraulica") — opcional, pra
+        # dar contexto na Central de Notificações sem precisar adivinhar
+        # a área a partir do equipamento.
+        cursor.execute('''ALTER TABLE log_eventos ADD COLUMN IF NOT EXISTS area TEXT''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS colaboradores (
@@ -735,6 +740,9 @@ def init_db():
         cursor.execute('''ALTER TABLE ordens_servico ADD COLUMN IF NOT EXISTS motivo_nao_executada TEXT''')
         cursor.execute('''ALTER TABLE ordens_servico ADD COLUMN IF NOT EXISTS encerrado_por TEXT''')
         cursor.execute('''ALTER TABLE ordens_servico ADD COLUMN IF NOT EXISTS encerrado_em TEXT''')
+        # 🆕 Mesma ideia de área de log_eventos.area — opcional, pra dar
+        # contexto na Central de Notificações.
+        cursor.execute('''ALTER TABLE ordens_servico ADD COLUMN IF NOT EXISTS area TEXT''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS os_fotos (
@@ -1322,6 +1330,7 @@ class RegistroComFoto(BaseModel):
     operador: str
     categoria: str
     foto_base64: Optional[str] = None
+    area: Optional[str] = None  # 🆕 chave de AREAS_OFICINA, ex: "hidraulica" — opcional
 
 
 # ==========================================
@@ -1541,6 +1550,7 @@ class OrdemServicoCriar(BaseModel):
     descricao: Optional[str] = None
     fotos_base64: list[str] = []  # 1 OS pode ter várias páginas/fotos
     operador: str
+    area: Optional[str] = None  # 🆕 chave de AREAS_OFICINA, ex: "hidraulica" — opcional
 
 
 class OrdemServicoStatus(BaseModel):
@@ -2424,9 +2434,9 @@ def registrar_com_foto(dados: RegistroComFoto):
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, categoria) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (agora, dados.operador, dados.peca_id, dados.acao, dados.categoria)
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, categoria, area) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (agora, dados.operador, dados.peca_id, dados.acao, dados.categoria, dados.area)
         )
         evento_id = cursor.fetchone()["id"]
 
@@ -2471,7 +2481,7 @@ def get_registros_ocorrencia(categoria: Optional[str] = None, limite: int = 100)
         cursor = conn.cursor()
         if categoria:
             cursor.execute("""
-                SELECT e.id, e.data_hora, e.operador, e.peca_id, e.acao, e.categoria,
+                SELECT e.id, e.data_hora, e.operador, e.peca_id, e.acao, e.categoria, e.area,
                        f.foto_base64
                 FROM log_eventos e
                 LEFT JOIN fotos_registro f ON f.evento_id = e.id
@@ -2481,7 +2491,7 @@ def get_registros_ocorrencia(categoria: Optional[str] = None, limite: int = 100)
             """, (categoria, limite))
         else:
             cursor.execute("""
-                SELECT e.id, e.data_hora, e.operador, e.peca_id, e.acao, e.categoria,
+                SELECT e.id, e.data_hora, e.operador, e.peca_id, e.acao, e.categoria, e.area,
                        f.foto_base64
                 FROM log_eventos e
                 LEFT JOIN fotos_registro f ON f.evento_id = e.id
@@ -3608,11 +3618,11 @@ def criar_ordem_servico(dados: OrdemServicoCriar):
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO ordens_servico (numero_os, descricao, status, criado_por, criado_em)
-            VALUES (%s, %s, 'Em Andamento', %s, %s)
+            INSERT INTO ordens_servico (numero_os, descricao, status, criado_por, criado_em, area)
+            VALUES (%s, %s, 'Em Andamento', %s, %s, %s)
             RETURNING id
             """,
-            (dados.numero_os, dados.descricao, dados.operador, agora)
+            (dados.numero_os, dados.descricao, dados.operador, agora, dados.area)
         )
         os_id = cursor.fetchone()["id"]
 
