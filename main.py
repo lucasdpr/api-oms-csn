@@ -1286,6 +1286,12 @@ class EventoLog(BaseModel):
     acao: str
     operador: str
 
+# 🆕 registrarHistorico() no front-end usa peca_id como uma "tag" pra
+# ações de sessão/administrativas que não são de um equipamento real
+# (ver comentário em registrar_evento) — essas nunca viram notificação
+# nem aparecem no feed da Central, só ficam na Auditoria.
+TAGS_AUDITORIA_SEM_NOTIFICACAO = ("AUTENTICAÇÃO", "SISTEMA")
+
 class LoginColaborador(BaseModel):
     matricula: str
     senha: str
@@ -1972,14 +1978,25 @@ def registrar_evento(evento: EventoLog):
         )
         conn.commit()
 
-    PALAVRAS_CRITICAS = ["b.o", "blackout", "quebra", "fim de vida", "alarme"]
-    is_critico = any(p in evento.acao.lower() for p in PALAVRAS_CRITICAS)
+    # 🔧 CORREÇÃO ("não quero notificação de login" + Central de
+    # Notificações "mudando toda hora"): registrarHistorico() no
+    # front-end reaproveita esse mesmo endpoint pra ações de sessão
+    # (login, logout, acesso visitante) usando peca_id como uma tag
+    # genérica, não um equipamento de verdade. Isso disparava push E
+    # entrava na Central toda vez que QUALQUER PESSOA logava — puro
+    # ruído, sem nenhuma ação real da oficina por trás. Essas tags
+    # continuam gravadas em log_eventos (auditoria não perde nada),
+    # só não viram notificação nem aparecem no feed (ver
+    # /api/notificacoes/feed).
+    if evento.peca_id not in TAGS_AUDITORIA_SEM_NOTIFICACAO:
+        PALAVRAS_CRITICAS = ["b.o", "blackout", "quebra", "fim de vida", "alarme"]
+        is_critico = any(p in evento.acao.lower() for p in PALAVRAS_CRITICAS)
 
-    enviar_push_para_area(
-        titulo="🚨 Evento crítico" if is_critico else "📋 Registro no equipamento",
-        corpo=f"{evento.operador} — {evento.peca_id}: {evento.acao}",
-        area="Mecânico" if is_critico else "Ambos"
-    )
+        enviar_push_para_area(
+            titulo="🚨 Evento crítico" if is_critico else "📋 Registro no equipamento",
+            corpo=f"{evento.operador} — {evento.peca_id}: {evento.acao}",
+            area="Mecânico" if is_critico else "Ambos"
+        )
 
     return {"sucesso": True}
 
@@ -2439,9 +2456,10 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
             FROM log_eventos e
             LEFT JOIN notificacoes_lidas l
                 ON l.tipo = 'evento' AND l.evento_id = e.id::text AND l.matricula = %s
+            WHERE e.peca_id != ALL(%s)
             ORDER BY e.id DESC
             LIMIT %s
-        """, (matricula, limite))
+        """, (matricula, list(TAGS_AUDITORIA_SEM_NOTIFICACAO), limite))
         eventos = cursor.fetchall()
 
         cursor.execute("""
