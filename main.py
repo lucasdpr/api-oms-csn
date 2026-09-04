@@ -1348,11 +1348,13 @@ class FolhaoRascunhoFinalizar(BaseModel):
 class RoloAjuste(BaseModel):
     id: str
     fator: float
+    operador: Optional[str] = None
 
 class HidraulicaAjuste(BaseModel):
     id: str
     local: str
     fator: float
+    operador: Optional[str] = None
 
 class PushSubscribe(BaseModel):
     matricula: str
@@ -1364,7 +1366,7 @@ class PushUnsubscribe(BaseModel):
     endpoint: str
 
 class NotificacaoMarcarLida(BaseModel):
-    tipo: str       # "evento" | "os" | "achado"
+    tipo: str       # "evento" | "os" | "achado" | "estoque"
     evento_id: str
     matricula: str
 
@@ -2337,7 +2339,24 @@ def ajustar_rolo(dados: RoloAjuste):
         cursor.execute("UPDATE rolos SET qtd = qtd + %s WHERE id = %s", (dados.fator, dados.id))
         cursor.execute("SELECT * FROM rolos WHERE id = %s", (dados.id,))
         atualizado = cursor.fetchone()
+
+        # 🆕 "vai ter que colocar rolos, hidráulica tanto a área e tando o
+        # estoque pq se for atualizado gera notificação" — grava com uma
+        # tag própria (não mais via registrarHistorico do front-end, que
+        # usava "ALMOXARIFADO" pra tudo e nunca aparecia na Central de
+        # Notificações) pra dar pra filtrar certinho em
+        # /api/notificacoes/feed.
+        agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
+        operador = dados.operador or "Sistema"
+        sinal = "+" if dados.fator >= 0 else ""
+        acao = f"Ajuste de estoque — {atualizado.get('nome', dados.id)}: {sinal}{dados.fator:g} (saldo atual: {atualizado['qtd']:g})"
+        cursor.execute(
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
+            (agora, operador, "ESTOQUE-ROLOS", acao, "rolos")
+        )
         conn.commit()
+
+    enviar_push_para_area(titulo="🧵 Estoque de Rolos ajustado", corpo=f"{operador} — {acao}", area="Ambos")
 
     return {"sucesso": True, "rolo": atualizado}
 
@@ -2371,7 +2390,23 @@ def ajustar_hidraulica(dados: HidraulicaAjuste):
         cursor.execute(f"UPDATE hidraulica SET {coluna} = {coluna} + %s WHERE id = %s", (dados.fator, dados.id))
         cursor.execute("SELECT * FROM hidraulica WHERE id = %s", (dados.id,))
         atualizado = cursor.fetchone()
+
+        # 🆕 Mesma ideia do ajuste de Rolos acima — tag própria pra
+        # aparecer em /api/notificacoes/feed (área sintética
+        # "hidraulica-estoque", pra não confundir com a área de reparo
+        # "hidraulica" da Central de Áreas — são coisas diferentes).
+        agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
+        operador = dados.operador or "Sistema"
+        rotulo = "Aplicado na Máquina" if dados.local == "aplicado" else "Reserva (Oficina)"
+        sinal = "+" if dados.fator >= 0 else ""
+        acao = f"Ajuste hidráulico — {atualizado.get('nome', dados.id)} ({rotulo}): {sinal}{dados.fator:g}"
+        cursor.execute(
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
+            (agora, operador, "ESTOQUE-HIDRAULICA", acao, "hidraulica-estoque")
+        )
         conn.commit()
+
+    enviar_push_para_area(titulo="🛢️ Estoque Hidráulico ajustado", corpo=f"{operador} — {acao}", area="Ambos")
 
     return {"sucesso": True, "item": atualizado}
 
@@ -2506,7 +2541,24 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
         """, (matricula, limite))
         achados = cursor.fetchall()
 
-    todos = list(eventos) + list(ordens) + list(achados)
+        # 🆕 Ajustes de Estoque de Rolos/Hidráulica — gravados com tag
+        # própria em log_eventos (ver ajustar_rolo/ajustar_hidraulica),
+        # com "area" sintética ("rolos"/"hidraulica-estoque") pra
+        # aparecerem como área própria na Central de Notificações.
+        cursor.execute("""
+            SELECT 'estoque' AS tipo, e.id::text AS evento_id, e.area, e.peca_id AS referencia,
+                   e.acao AS descricao, e.operador AS autor, e.data_hora,
+                   (l.matricula IS NOT NULL) AS lida
+            FROM log_eventos e
+            LEFT JOIN notificacoes_lidas l
+                ON l.tipo = 'estoque' AND l.evento_id = e.id::text AND l.matricula = %s
+            WHERE e.peca_id IN ('ESTOQUE-ROLOS', 'ESTOQUE-HIDRAULICA')
+            ORDER BY e.id DESC
+            LIMIT %s
+        """, (matricula, limite))
+        estoque = cursor.fetchall()
+
+    todos = list(eventos) + list(ordens) + list(achados) + list(estoque)
     todos.sort(key=lambda x: x["data_hora"] or "", reverse=True)
     return todos[:limite]
 
