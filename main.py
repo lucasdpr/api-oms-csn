@@ -1780,15 +1780,25 @@ def atualizar_peca(peca: PecaUpdate):
         # como área própria na Central de Notificações (antes só virava
         # push — nunca ficava registrado em lugar nenhum que o feed
         # olhasse, por isso "faltou o Sinótico 3D" na Central).
-        with get_db() as conn2:
-            cursor2 = conn2.cursor()
-            cursor2.execute(
-                "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, categoria, area) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
-                (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), "Sinótico 3D", peca.id,
-                 peca.mancal_evento_corpo, None, "sinotico-3d")
-            )
-            conn2.commit()
+        # 🐛 CORREÇÃO: sem o try/except, uma falha aqui (ex: pool de
+        # conexão esgotado — já aconteceu em produção) derrubava a rota
+        # inteira com 500, mesmo com a atualização REAL da peça
+        # (rolos_travados/mancais_ocorrencias) já commitada mais acima —
+        # o app mostraria erro pro usuário apesar do save ter funcionado.
+        # Mesmo padrão de enviar_push_para_area: registrar a notificação
+        # é "nice to have", nunca deve derrubar o que já foi salvo.
+        try:
+            with get_db() as conn2:
+                cursor2 = conn2.cursor()
+                cursor2.execute(
+                    "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, categoria, area) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), "Sinótico 3D", peca.id,
+                     peca.mancal_evento_corpo, None, "sinotico-3d")
+                )
+                conn2.commit()
+        except Exception as e:
+            print(f"⚠️ Falha ao gravar evento de mancal do Sinótico 3D na Central de Notificações: {e}")
 
     # 🆕 Notificação quando a peça vai (ou passa a ir) pra Reserva —
     # só dispara na TROCA de status, não toda vez que alguém salva a
