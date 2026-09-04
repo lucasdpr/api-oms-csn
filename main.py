@@ -1776,6 +1776,19 @@ def atualizar_peca(peca: PecaUpdate):
             corpo=peca.mancal_evento_corpo,
             area="Ambos"
         )
+        # 🆕 Grava em log_eventos com area="sinotico-3d" pra aparecer
+        # como área própria na Central de Notificações (antes só virava
+        # push — nunca ficava registrado em lugar nenhum que o feed
+        # olhasse, por isso "faltou o Sinótico 3D" na Central).
+        with get_db() as conn2:
+            cursor2 = conn2.cursor()
+            cursor2.execute(
+                "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, categoria, area) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), "Sinótico 3D", peca.id,
+                 peca.mancal_evento_corpo, None, "sinotico-3d")
+            )
+            conn2.commit()
 
     # 🆕 Notificação quando a peça vai (ou passa a ir) pra Reserva —
     # só dispara na TROCA de status, não toda vez que alguém salva a
@@ -2528,7 +2541,7 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
         ordens = cursor.fetchall()
 
         cursor.execute("""
-            SELECT 'achado' AS tipo, a.id::text AS evento_id, NULL AS area, r.peca_id AS referencia,
+            SELECT 'achado' AS tipo, a.id::text AS evento_id, 'qualidade' AS area, r.peca_id AS referencia,
                    a.descricao, a.criado_por AS autor, a.criado_em AS data_hora,
                    (l.matricula IS NOT NULL) AS lida
             FROM qualidade_achados a
@@ -2540,6 +2553,22 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
             LIMIT %s
         """, (matricula, limite))
         achados = cursor.fetchall()
+
+        # 🆕 Ocorrências de mancal no Sinótico 3D — antes só viravam push,
+        # agora também ficam em log_eventos (area="sinotico-3d") pra
+        # aparecerem como área própria em vez de sumir/virar "Outros".
+        cursor.execute("""
+            SELECT 'sinotico' AS tipo, e.id::text AS evento_id, e.area, e.peca_id AS referencia,
+                   e.acao AS descricao, e.operador AS autor, e.data_hora,
+                   (l.matricula IS NOT NULL) AS lida
+            FROM log_eventos e
+            LEFT JOIN notificacoes_lidas l
+                ON l.tipo = 'sinotico' AND l.evento_id = e.id::text AND l.matricula = %s
+            WHERE e.area = 'sinotico-3d'
+            ORDER BY e.id DESC
+            LIMIT %s
+        """, (matricula, limite))
+        sinotico = cursor.fetchall()
 
         # 🆕 Ajustes de Estoque de Rolos/Hidráulica — gravados com tag
         # própria em log_eventos (ver ajustar_rolo/ajustar_hidraulica),
@@ -2558,7 +2587,7 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
         """, (matricula, limite))
         estoque = cursor.fetchall()
 
-    todos = list(eventos) + list(ordens) + list(achados) + list(estoque)
+    todos = list(eventos) + list(ordens) + list(achados) + list(estoque) + list(sinotico)
     todos.sort(key=lambda x: x["data_hora"] or "", reverse=True)
     return todos[:limite]
 
