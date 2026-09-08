@@ -1271,40 +1271,70 @@ def registrar_evento_atividade_oficina(operador: str, area: str, peca_id: Option
         print(f"⚠️ Falha ao registrar evento de Atividade da Oficina na Central de Notificações: {e}")
 
 
-# 🐛 CORREÇÃO ("líder da Caldeiraria respondeu, técnico do Segmento de
-# Grupo que pediu a Atividade Extra não viu nada"): registrar_evento_
-# atividade_oficina acima sempre grava sob a ÁREA DONA da atividade
-# (quem vai EXECUTAR — ex: Caldeiraria). Isso é certo pra Caldeiraria/
-# ADM verem, mas quem PEDIU (solicitante_matricula, de uma área
-# diferente — ex: Segmento de Grupo) tem sua Central de Notificações
-# restrita à PRÓPRIA área (ver operadorTecnicoComArea no front) — um
-# evento só sob "caldeiraria" nunca aparece pra ele, não importa se leu
-# ou não. Busca a área cadastrada do solicitante e, se for diferente da
-# área dona, grava uma SEGUNDA linha sob a área dele também.
-def notificar_solicitante_atividade_oficina(solicitante_matricula: Optional[str], area_dona: str, peca_id: Optional[str], acao: str, operador: Optional[str]):
-    if not solicitante_matricula:
-        return
+def _buscar_area_origem_checklist_extra(cursor, oficina_atividade_id: Optional[int]):
+    """Se essa atividade nasceu de um 'Registrar Atividade Extra' num
+    Checklist de Execução, devolve a área de ORIGEM — o equipamento que
+    estava sendo executado (ex: 'molde-mcc4') — e não a área DESTINO
+    (quem vai executar a atividade extra, ex: 'caldeiraria'). None se a
+    atividade foi criada direto no quadro de uma área (sem checklist
+    por trás) — aí não tem 'origem' nenhuma pra notificar."""
+    if not oficina_atividade_id:
+        return None
+    cursor.execute(
+        """
+        SELECT ce.tipo_equipamento
+        FROM checklist_execucao_atividades_extra cea
+        JOIN checklist_execucao_execucoes ce ON ce.id = cea.execucao_id
+        WHERE cea.oficina_atividade_id = %s
+        """,
+        (oficina_atividade_id,)
+    )
+    linha = cursor.fetchone()
+    return linha["tipo_equipamento"] if linha else None
+
+
+# 🐛 CORREÇÃO ("líder da Caldeiraria respondeu, ninguém do lado de quem
+# pediu viu nada"): registrar_evento_atividade_oficina acima sempre
+# grava sob a ÁREA DONA da atividade (quem vai EXECUTAR — ex:
+# Caldeiraria). Certo pra Caldeiraria/ADM verem, mas isso não basta:
+#   1) Quem PEDIU (solicitante_matricula) tem a própria Central
+#      restrita à SUA área (ver operadorTecnicoComArea no front) — um
+#      evento só sob "caldeiraria" nunca aparece pra ele.
+#   2) Se o pedido nasceu de um "Registrar Atividade Extra" num
+#      Checklist de Execução, o solicitante gravado é só quem clicou
+#      no botão NAQUELE momento — podia até ser um ADM testando, sem
+#      área própria nenhuma (não aparece em equipe_oficina). O resto da
+#      equipe da área de ORIGEM do checklist (ex: outros técnicos do
+#      Molde MCC4) também precisa saber, não só esse indivíduo.
+# Por isso notifica as DUAS áreas extras (solicitante + origem do
+# checklist), sem duplicar quando coincidem entre si ou com a área dona.
+def notificar_areas_extras_atividade_oficina(oficina_atividade_id: Optional[int], solicitante_matricula: Optional[str], area_dona: str, peca_id: Optional[str], acao: str, operador: Optional[str]):
+    areas_extras = set()
     try:
         with get_db() as conn:
             cursor = conn.cursor()
-            # 🐛 CORRIGIDO ("segunda mensagem, ainda não apareceu"): a
-            # primeira versão buscava em colaboradores.area — coluna que
-            # NUNCA é escrita por nenhuma rota deste backend (fica
-            # parada no DEFAULT 'Ambos' pra todo mundo). A área de
-            # verdade do colaborador mora em equipe_oficina (mesma
-            # tabela que o login usa via _buscar_area_colaborador — ver
-            # login_colaborador logo abaixo) — sem essa correção,
-            # area_solicitante era sempre 'Ambos' e a linha duplicada
-            # nunca era gravada pra ninguém.
-            area_solicitante = _buscar_area_colaborador(cursor, solicitante_matricula)
+            if solicitante_matricula:
+                # 🐛 CORRIGIDO ("segunda mensagem, ainda não apareceu"): a
+                # primeira versão buscava em colaboradores.area — coluna
+                # que NUNCA é escrita por nenhuma rota deste backend
+                # (fica parada no DEFAULT 'Ambos' pra todo mundo). A área
+                # de verdade do colaborador mora em equipe_oficina (mesma
+                # tabela que o login usa via _buscar_area_colaborador).
+                area_sol = _buscar_area_colaborador(cursor, solicitante_matricula)
+                if area_sol:
+                    areas_extras.add(area_sol)
+            area_origem = _buscar_area_origem_checklist_extra(cursor, oficina_atividade_id)
+            if area_origem:
+                areas_extras.add(area_origem)
     except Exception as e:
-        print(f"⚠️ Falha ao buscar área do solicitante {solicitante_matricula}: {e}")
+        print(f"⚠️ Falha ao buscar áreas extras pra notificar (atividade {oficina_atividade_id}): {e}")
         return
-    # None/"Ambos" = sem área própria de verdade (ex: ADM, ou matrícula
-    # não cadastrada em equipe_oficina) — ele já vê tudo (ADM) ou não
-    # tem Central restrita nenhuma pra alimentar, não precisa duplicar.
-    if area_solicitante and area_solicitante not in (area_dona, "Ambos"):
-        registrar_evento_atividade_oficina(operador=operador, area=area_solicitante, peca_id=peca_id, acao=acao)
+    # "Ambos"/vazio = sem área própria de verdade (ADM, ou matrícula não
+    # cadastrada em equipe_oficina) — não sobra nada útil pra duplicar.
+    areas_extras.discard(area_dona)
+    areas_extras.discard("Ambos")
+    for area in areas_extras:
+        registrar_evento_atividade_oficina(operador=operador, area=area, peca_id=peca_id, acao=acao)
 
 
 class PecaUpdate(BaseModel):
@@ -2982,11 +3012,12 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
         acao=acao_texto
     )
     # 🐛 CORREÇÃO: sem isso, quem PEDIU a atividade (solicitante_
-    # matricula, de outra área) nunca via essa mudança de status na
-    # própria Central — só ADM/quem é da área dona via ("líder da
-    # Caldeiraria mudou status, técnico do Segmento de Grupo que pediu
-    # não via nada"). Ver notificar_solicitante_atividade_oficina.
-    notificar_solicitante_atividade_oficina(
+    # matricula, de outra área) e o resto da equipe da área de ORIGEM do
+    # checklist (se veio de "Atividade Extra") nunca viam essa mudança
+    # de status na própria Central. Ver
+    # notificar_areas_extras_atividade_oficina.
+    notificar_areas_extras_atividade_oficina(
+        oficina_atividade_id=dados.id,
         solicitante_matricula=linha["solicitante_matricula"],
         area_dona=linha["area"],
         peca_id=linha["equipamento_id"],
@@ -3116,14 +3147,16 @@ def criar_mensagem_atividade_oficina(dados: OficinaAtividadeMensagem):
         peca_id=atividade["equipamento_id"],
         acao=acao_texto
     )
-    # 🐛 CORREÇÃO ("líder da Caldeiraria respondeu, técnico do Segmento
-    # de Grupo que pediu não viu a mensagem na própria Central"): sem
-    # isso, a linha acima só aparece sob a área DONA da atividade
-    # (Caldeiraria) — invisível pra quem pediu, restrito à própria área.
-    # Só duplica quando quem escreveu NÃO é o próprio solicitante (senão
-    # ele veria a própria mensagem "chegando" pra ele mesmo).
+    # 🐛 CORREÇÃO ("líder da Caldeiraria respondeu, ninguém do lado de
+    # quem pediu viu a mensagem na própria Central"): sem isso, a linha
+    # acima só aparece sob a área DONA da atividade (Caldeiraria) —
+    # invisível pra quem pediu e pra área de origem do checklist, cada
+    # um restrito à própria área. Só duplica quando quem escreveu NÃO é
+    # o próprio solicitante (senão ele veria a própria mensagem
+    # "chegando" pra ele mesmo).
     if not eh_o_solicitante_escrevendo:
-        notificar_solicitante_atividade_oficina(
+        notificar_areas_extras_atividade_oficina(
+            oficina_atividade_id=dados.atividade_id,
             solicitante_matricula=atividade["solicitante_matricula"],
             area_dona=atividade["area"],
             peca_id=atividade["equipamento_id"],
@@ -3185,8 +3218,10 @@ def excluir_atividade_oficina(dados: OficinaExcluir):
         acao=acao_texto
     )
     # 🐛 CORREÇÃO: mesma lacuna do mudar_status — quem pediu (de outra
-    # área) não via a exclusão na própria Central.
-    notificar_solicitante_atividade_oficina(
+    # área) e a área de origem do checklist não viam a exclusão na
+    # própria Central.
+    notificar_areas_extras_atividade_oficina(
+        oficina_atividade_id=dados.id,
         solicitante_matricula=linha["solicitante_matricula"],
         area_dona=linha["area"],
         peca_id=linha["equipamento_id"],
@@ -3348,8 +3383,10 @@ def editar_atividade_oficina(dados: OficinaAtividadeEditar):
         acao=acao_texto
     )
     # 🐛 CORREÇÃO: mesma lacuna do mudar_status — quem pediu (de outra
-    # área) não via a edição na própria Central.
-    notificar_solicitante_atividade_oficina(
+    # área) e a área de origem do checklist não viam a edição na própria
+    # Central.
+    notificar_areas_extras_atividade_oficina(
+        oficina_atividade_id=dados.id,
         solicitante_matricula=linha["solicitante_matricula"],
         area_dona=linha["area"],
         peca_id=dados.equipamento_id,
@@ -3932,6 +3969,37 @@ def registrar_atividade_extra_checklist_execucao(dados: ChecklistExecucaoAtivida
         )
         novo_id = cursor.fetchone()["id"]
         conn.commit()
+
+    # 🆕 Além da área DESTINO (dados.area — quem vai executar, ex:
+    # Caldeiraria) e do push pro solicitante individual (dentro de
+    # criar_atividade_oficina), a área de ORIGEM do checklist (o
+    # equipamento que estava sendo executado, ex: Molde MCC4) também
+    # precisa saber — não só quem literalmente clicou em "Registrar
+    # Atividade Extra" (pode ter sido um ADM testando, sem área própria
+    # nenhuma em equipe_oficina; e mesmo pra um técnico de verdade, o
+    # RESTO da equipe da área de origem também quer saber que um pedido
+    # saiu do checklist deles).
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT tipo_equipamento FROM checklist_execucao_execucoes WHERE id = %s",
+                (dados.execucao_id,)
+            )
+            linha_execucao = cursor.fetchone()
+        area_origem = linha_execucao["tipo_equipamento"] if linha_execucao else None
+    except Exception as e:
+        print(f"⚠️ Falha ao buscar área de origem da execução {dados.execucao_id}: {e}")
+        area_origem = None
+
+    if area_origem and area_origem != dados.area:
+        nome_area_destino = AREA_OFICINA_NOMES.get(dados.area, dados.area)
+        registrar_evento_atividade_oficina(
+            operador=dados.operador_nome,
+            area=area_origem,
+            peca_id=dados.equipamento_id,
+            acao=f"{dados.operador_nome} pediu ajuda de {nome_area_destino}: {dados.descricao}"
+        )
 
     return {"sucesso": True, "id": novo_id, "oficina_atividade_id": oficina_atividade_id}
 
