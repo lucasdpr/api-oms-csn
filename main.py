@@ -667,6 +667,36 @@ def init_db():
             ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS executado_por TEXT
         ''')
 
+        # 🆕 Quantas vezes essa atividade já foi REABERTA (ver fluxo de
+        # window.reabrirAtividadeOficina) — guardado direto na própria
+        # atividade pra o front-end mostrar o indicador "🔄 Reaberta Nx"
+        # sem precisar de JOIN/COUNT em oficina_atividades_reaberturas
+        # toda vez que lista as atividades (ver listar_atividades_oficina).
+        cursor.execute('''
+            ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS reaberturas_count INTEGER DEFAULT 0
+        ''')
+
+        # 🆕 HISTÓRICO DE REABERTURAS — antes de reabrir (ver mudar_status_
+        # atividade_oficina com dados.reabertura=True), o UPDATE zera
+        # concluido_em e SOBRESCREVE motivo_status com o motivo da
+        # reabertura — perdendo pra sempre a data da conclusão original e
+        # o motivo/observação de quem concluiu. Essa tabela guarda uma
+        # linha por reabertura com o que a atividade tinha ANTES de mudar,
+        # pra dar pra reconstruir o histórico completo depois (indicador
+        # visual, relatório de retrabalho — ver /mais_reabertas).
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS oficina_atividades_reaberturas (
+                id SERIAL PRIMARY KEY,
+                atividade_id INTEGER NOT NULL REFERENCES oficina_atividades(id) ON DELETE CASCADE,
+                concluido_em_anterior TEXT,
+                motivo_conclusao_anterior TEXT,
+                motivo_reabertura TEXT NOT NULL,
+                reaberto_por TEXT,
+                executado_por_anterior TEXT,
+                data_reabertura TEXT
+            )
+        ''')
+
         # 🆕 CONVERSA DA ATIVIDADE — thread de mensagens de mão dupla
         # numa atividade específica. Sem isso, o único jeito de "avisar"
         # alguma coisa era recusar/pausar (que exige motivo, mas é uma
@@ -2987,6 +3017,51 @@ def listar_atividades_oficina(area: Optional[str] = None, status: Optional[str] 
         return cursor.fetchall()
 
 
+@app.get("/api/oficina/atividade/{atividade_id}/reaberturas", tags=["Oficina"], summary="Histórico de reaberturas de uma atividade")
+def listar_reaberturas_atividade_oficina(atividade_id: int):
+    """
+    Lista o histórico de reaberturas de UMA atividade (mais recente
+    primeiro) — o que ela tinha (data de conclusão, motivo/observação,
+    quem executou) antes de cada reabertura. Ver comentário da tabela
+    oficina_atividades_reaberturas no schema.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, atividade_id, concluido_em_anterior, motivo_conclusao_anterior,
+                   motivo_reabertura, reaberto_por, executado_por_anterior, data_reabertura
+            FROM oficina_atividades_reaberturas
+            WHERE atividade_id = %s
+            ORDER BY id DESC
+            """,
+            (atividade_id,)
+        )
+        return cursor.fetchall()
+
+
+@app.get("/api/oficina/atividades/mais_reabertas", tags=["Oficina"], summary="Atividades mais reabertas (retrabalho)")
+def listar_atividades_mais_reabertas_oficina(limite: int = 10):
+    """
+    Ranking simples de retrabalho: atividades com reaberturas_count > 0,
+    da maior contagem pra menor. Endpoint pronto pra alimentar uma tela/
+    relatório visual no futuro — hoje não é consumido pelo front-end.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, descricao, area, equipamento_id, reaberturas_count
+            FROM oficina_atividades
+            WHERE reaberturas_count > 0
+            ORDER BY reaberturas_count DESC, id DESC
+            LIMIT %s
+            """,
+            (limite,)
+        )
+        return cursor.fetchall()
+
+
 @app.post("/api/oficina/atividade", tags=["Oficina"], summary="Criar atividade da Oficina")
 def criar_atividade_oficina(dados: OficinaAtividade):
     agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
@@ -3071,8 +3146,31 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
     # limpeza em transições que não vieram acompanhadas de nota).
     motivo_status = dados.motivo.strip() if (dados.motivo or "").strip() else None
 
+    reaberturas_count_atual = 0
     with get_db() as conn:
         cursor = conn.cursor()
+        # 🆕 Se é uma reabertura, ANTES de zerar concluido_em e sobrescrever
+        # motivo_status (perdendo esses dados pra sempre), guarda uma
+        # linha no histórico (oficina_atividades_reaberturas) com o que a
+        # atividade TINHA — ver comentário da tabela no schema.
+        if dados.reabertura:
+            cursor.execute(
+                "SELECT concluido_em, motivo_status, executado_por FROM oficina_atividades WHERE id = %s",
+                (dados.id,)
+            )
+            anterior = cursor.fetchone()
+            if not anterior:
+                raise HTTPException(status_code=404, detail="Atividade não encontrada.")
+            cursor.execute(
+                """
+                INSERT INTO oficina_atividades_reaberturas
+                    (atividade_id, concluido_em_anterior, motivo_conclusao_anterior, motivo_reabertura, reaberto_por, executado_por_anterior, data_reabertura)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (dados.id, anterior["concluido_em"], anterior["motivo_status"], (dados.motivo or "").strip(),
+                 dados.operador, anterior["executado_por"], agora)
+            )
+
         # 🆕 Se a atividade voltou a ficar aberta (reaberta depois de
         # concluída, por exemplo), reseta o aviso de atraso — se ela
         # ficar atrasada de novo, precisa poder notificar de novo.
@@ -3082,6 +3180,8 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
         # Não sobrescreve em Concluir/Recusar/Aguardar/Reabrir (mantém o
         # nome de quem pegou o serviço da última vez que foi iniciada).
         set_executor = ", executado_por = %s" if dados.status == "Em Andamento" else ""
+        # 🆕 Reabertura incrementa o contador — ver coluna reaberturas_count.
+        set_reaberturas = ", reaberturas_count = reaberturas_count + 1" if dados.reabertura else ""
         params = [dados.status, concluido_em, motivo_status]
         if set_executor:
             # 🆕 Prioriza os colaboradores escolhidos no modal (pode ser
@@ -3092,15 +3192,17 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
         cursor.execute(
             "UPDATE oficina_atividades SET status = %s, concluido_em = %s, motivo_status = %s"
             + set_executor
+            + set_reaberturas
             + (", notificado_atraso = FALSE" if resetar_notificacao else "")
             + " WHERE id = %s"
-            + " RETURNING equipamento_id, descricao, area, solicitante_matricula, executado_por",
+            + " RETURNING equipamento_id, descricao, area, solicitante_matricula, executado_por, reaberturas_count",
             params
         )
         linha = cursor.fetchone()
         if not linha:
             raise HTTPException(status_code=404, detail="Atividade não encontrada.")
         conn.commit()
+        reaberturas_count_atual = linha["reaberturas_count"] or 0
 
     # 🔧 CORRIGIDO ("nem chegou notificação de que ele iniciou a
     # atividade, e nem que recusou e o motivo"): antes só avisava em
@@ -3137,6 +3239,24 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
             corpo=corpo,
             url="/",
             dados_extra={"tipo_evento": "status", "atividade_id": dados.id, "area": linha["area"]}
+        )
+
+    # 🆕 RETRABALHO REPETIDO — quando essa reabertura faz o contador
+    # chegar a 2 ou mais, não é mais "reabriu uma vez, ok" — é um padrão
+    # que o ADM precisa enxergar (a área pode estar concluindo cedo
+    # demais, ou o problema pode não ter sido resolvido de verdade).
+    # Reaproveita enviar_push_para_area (que já manda pro ADM sempre,
+    # com prefixo de área — ver comentário da função) só que com um
+    # título com destaque, além do aviso normal que já vai pro
+    # solicitante acima.
+    if dados.reabertura and reaberturas_count_atual >= 2:
+        nome_area_retrabalho = AREA_OFICINA_NOMES.get(linha["area"], linha["area"])
+        tag_retrabalho = linha["equipamento_id"] or ""
+        enviar_push_para_area(
+            titulo=f"⚠️ RETRABALHO REPETIDO — {nome_area_retrabalho}",
+            corpo=f"{tag_retrabalho} — {linha['descricao']}: já reaberta {reaberturas_count_atual}x. Motivo agora: {motivo_status or '-'}",
+            area=linha["area"],
+            dados_extra={"tipo_evento": "reabertura", "atividade_id": dados.id, "area": linha["area"]}
         )
 
     # 🆕 Registro persistente na Central — TODA mudança de status, não
