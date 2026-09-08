@@ -1171,15 +1171,25 @@ def limpar_texto_para_notificacao(texto: str) -> str:
     return limpo
 
 
-def _disparar_push_para_inscricoes(inscricoes, titulo: str, corpo: str, url: str):
+def _disparar_push_para_inscricoes(inscricoes, titulo: str, corpo: str, url: str, dados_extra: Optional[dict] = None):
     """Núcleo comum de envio — usado tanto por área (enviar_push_para_area)
     quanto por matrícula específica (enviar_push_para_matricula). Fica
-    num lugar só pra não duplicar a limpeza de endpoint morto."""
+    num lugar só pra não duplicar a limpeza de endpoint morto.
+
+    🆕 `dados_extra` (tipo_evento, atividade_id, área...) vai junto no
+    payload — é o que o Service Worker usa em `notificationclick` pra
+    montar a URL certa (Conversa da Atividade vs Atividade destacada no
+    quadro), o mesmo destino que o clique dentro da Central já usa. Sem
+    isso, o SW só tinha `url` genérica ("/app.html#notificacoes") e
+    nunca sabia pra qual atividade/conversa ir."""
     if not inscricoes:
         return
     corpo = limpar_texto_para_notificacao(corpo)
     titulo = limpar_texto_para_notificacao(titulo)
-    payload = json_lib.dumps({"titulo": titulo, "corpo": corpo, "url": url})
+    payload_dict = {"titulo": titulo, "corpo": corpo, "url": url}
+    if dados_extra:
+        payload_dict.update({k: v for k, v in dados_extra.items() if v is not None})
+    payload = json_lib.dumps(payload_dict)
 
     endpoints_mortos = []
     for inscricao in inscricoes:
@@ -1222,7 +1232,7 @@ def _disparar_push_para_inscricoes(inscricoes, titulo: str, corpo: str, url: str
             conn.commit()
 
 
-def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str = "/app.html#notificacoes"):
+def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str = "/app.html#notificacoes", dados_extra: Optional[dict] = None):
     if not PUSH_HABILITADO:
         return
     try:
@@ -1237,6 +1247,8 @@ def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str
                     "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE matricula = ANY(%s)",
                     (list(MATRICULAS_ADM),)
                 )
+                inscricoes = cursor.fetchall()
+                _disparar_push_para_inscricoes(inscricoes, titulo, corpo, url, dados_extra)
             else:
                 # Evento COM área da oficina (atividade nova/atrasada) —
                 # administrador recebe sempre + quem tiver exatamente
@@ -1252,14 +1264,31 @@ def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str
                 # o técnico da área nunca recebia nada, silenciosamente.
                 # A área de verdade do colaborador mora em
                 # equipe_oficina (ver _buscar_area_colaborador).
+                #
+                # 🆕 Título do ADM ganha o prefixo da área de origem
+                # ("[Caldeiraria] ..."): o ADM recebe TODA notificação de
+                # TODAS as áreas misturadas, e o mesmo texto que já é
+                # claro pro técnico da área (que só vê a própria área,
+                # então já sabe de onde veio) virava uma parede de texto
+                # sem contexto pro ADM. O técnico da área continua
+                # recebendo o título original, sem prefixo redundante.
+                cursor.execute(
+                    "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE matricula = ANY(%s)",
+                    (list(MATRICULAS_ADM),)
+                )
+                inscricoes_adm = cursor.fetchall()
                 cursor.execute("""
                     SELECT ps.endpoint, ps.p256dh, ps.auth
                     FROM push_subscriptions ps
-                    LEFT JOIN equipe_oficina eo ON eo.matricula = ps.matricula AND eo.ativo = TRUE
-                    WHERE ps.matricula = ANY(%s) OR eo.area = %s
-                """, (list(MATRICULAS_ADM), area))
-            inscricoes = cursor.fetchall()
-        _disparar_push_para_inscricoes(inscricoes, titulo, corpo, url)
+                    JOIN equipe_oficina eo ON eo.matricula = ps.matricula AND eo.ativo = TRUE
+                    WHERE eo.area = %s AND ps.matricula != ALL(%s)
+                """, (area, list(MATRICULAS_ADM)))
+                inscricoes_area = cursor.fetchall()
+
+                nome_area_prefixo = NOME_AREA_PUSH.get(area) or AREA_OFICINA_NOMES.get(area) or area
+                titulo_adm = f"[{nome_area_prefixo}] {titulo}"
+                _disparar_push_para_inscricoes(inscricoes_adm, titulo_adm, corpo, url, dados_extra)
+                _disparar_push_para_inscricoes(inscricoes_area, titulo, corpo, url, dados_extra)
     except Exception as e:
         print(f"⚠️ Falha geral ao processar envio de push: {e}")
 
@@ -1268,7 +1297,7 @@ def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str
 # área Recusa ou coloca "Aguardando" numa atividade: quem PEDIU (o
 # técnico do Checklist de Execução, via solicitante_matricula) precisa
 # saber o motivo, não a área inteira de novo.
-def enviar_push_para_matricula(matricula: str, titulo: str, corpo: str, url: str = "/app.html#notificacoes"):
+def enviar_push_para_matricula(matricula: str, titulo: str, corpo: str, url: str = "/app.html#notificacoes", dados_extra: Optional[dict] = None):
     if not PUSH_HABILITADO or not matricula:
         return
     try:
@@ -1279,7 +1308,7 @@ def enviar_push_para_matricula(matricula: str, titulo: str, corpo: str, url: str
                 (matricula,)
             )
             inscricoes = cursor.fetchall()
-        _disparar_push_para_inscricoes(inscricoes, titulo, corpo, url)
+        _disparar_push_para_inscricoes(inscricoes, titulo, corpo, url, dados_extra)
     except Exception as e:
         print(f"⚠️ Falha geral ao processar envio de push (matrícula): {e}")
 
@@ -2978,7 +3007,11 @@ def criar_atividade_oficina(dados: OficinaAtividade):
         enviar_push_para_area(
             titulo="🔴 Atividade prioritária na Oficina" if is_alta_prioridade else f"🧰 Nova atividade — {nome_area}",
             corpo=f"{dados.operador} — {nome_area}: {dados.descricao}",
-            area=dados.area
+            area=dados.area,
+            # 🆕 tipo_evento/atividade_id vão no payload do push pro
+            # Service Worker saber pra onde navegar no notificationclick
+            # (mesmo destino que o clique dentro da Central já usa).
+            dados_extra={"tipo_evento": "criacao", "atividade_id": atividade_id, "area": dados.area}
         )
 
     # 🆕 Registro persistente na Central de Notificações — ver
@@ -3078,7 +3111,8 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
             matricula=linha["solicitante_matricula"],
             titulo=f"{nome_area} {verbo} sua atividade — {tag}",
             corpo=corpo,
-            url="/"
+            url="/",
+            dados_extra={"tipo_evento": "status", "atividade_id": dados.id, "area": linha["area"]}
         )
 
     # 🆕 Registro persistente na Central — TODA mudança de status, não
@@ -3149,7 +3183,8 @@ def verificar_atrasos_oficina():
         enviar_push_para_area(
             titulo="⏰ Atividade atrasada",
             corpo=f"{nome_area} — {a['descricao']} (prazo era {a['prazo']}, ainda não concluída).",
-            area=a["area"]
+            area=a["area"],
+            dados_extra={"tipo_evento": "status", "atividade_id": a["id"], "area": a["area"]}
         )
         # 🆕 Registro persistente — atraso é detectado pelo sistema, não
         # por uma ação de alguém, mas ainda é algo que "aconteceu" com a
@@ -3208,13 +3243,15 @@ def criar_mensagem_atividade_oficina(dados: OficinaAtividadeMensagem):
         enviar_push_para_area(
             titulo=f"💬 {dados.autor_nome} — {tag or nome_area}",
             corpo=dados.mensagem,
-            area=atividade["area"]
+            area=atividade["area"],
+            dados_extra={"tipo_evento": "mensagem", "atividade_id": dados.atividade_id, "area": atividade["area"]}
         )
     elif atividade["solicitante_matricula"]:
         enviar_push_para_matricula(
             matricula=atividade["solicitante_matricula"],
             titulo=f"💬 {nome_area} respondeu — {tag}",
-            corpo=f"{dados.autor_nome}: {dados.mensagem}"
+            corpo=f"{dados.autor_nome}: {dados.mensagem}",
+            dados_extra={"tipo_evento": "mensagem", "atividade_id": dados.atividade_id, "area": atividade["area"]}
         )
     # Sem solicitante e quem escreveu não é ele: é conversa interna da
     # própria área (atividade criada direto no quadro) — não tem "outro
