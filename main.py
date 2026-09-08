@@ -1220,11 +1220,22 @@ def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str
                 # Evento COM área da oficina (atividade nova/atrasada) —
                 # administrador recebe sempre + quem tiver exatamente
                 # essa área cadastrada.
+                # 🐛 CORRIGIDO ("Concluído no equipamento não notifica
+                # ninguém da área, só o ADM"): esta query usava
+                # `colaboradores.area` — a MESMA coluna morta já
+                # documentada em notificar_areas_extras_atividade_oficina
+                # (nunca escrita por nenhuma rota, sempre no DEFAULT
+                # 'Ambos'). Na prática, `c.area = %s` NUNCA batia com
+                # nada, então todo push "por área" (atividade nova,
+                # atrasada, mudança de status) só chegava pros 3 ADMs —
+                # o técnico da área nunca recebia nada, silenciosamente.
+                # A área de verdade do colaborador mora em
+                # equipe_oficina (ver _buscar_area_colaborador).
                 cursor.execute("""
                     SELECT ps.endpoint, ps.p256dh, ps.auth
                     FROM push_subscriptions ps
-                    JOIN colaboradores c ON c.matricula = ps.matricula
-                    WHERE c.matricula = ANY(%s) OR c.area = %s
+                    LEFT JOIN equipe_oficina eo ON eo.matricula = ps.matricula AND eo.ativo = TRUE
+                    WHERE ps.matricula = ANY(%s) OR eo.area = %s
                 """, (list(MATRICULAS_ADM), area))
             inscricoes = cursor.fetchall()
         _disparar_push_para_inscricoes(inscricoes, titulo, corpo, url)
