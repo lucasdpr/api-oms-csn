@@ -1245,6 +1245,32 @@ def enviar_push_para_matricula(matricula: str, titulo: str, corpo: str, url: str
         print(f"⚠️ Falha geral ao processar envio de push (matrícula): {e}")
 
 
+# 🆕 Registro PERSISTENTE de toda ação numa atividade da Oficina (criar,
+# mudar status, editar, excluir, mandar mensagem) — pediu explicitamente
+# que TODA ação gere notificação na Central. Antes só existia o push
+# (enviar_push_para_area/matricula), que é efêmero: se ninguém estava
+# com o app aberto/inscrito naquele segundo, a ação simplesmente
+# desaparecia sem deixar rastro na Central de Notificações. Grava em
+# log_eventos com categoria='Atividade Oficina' — uma categoria PRÓPRIA
+# (não usa a mesma de Ocorrência) porque tem query e navegação dedicadas
+# no feed (ver /api/notificacoes/feed, tipo 'atividade').
+# Mesmo padrão de robustez do evento de mancal do Sinótico 3D: nunca
+# deve derrubar a ação principal (que já foi commitada antes de chamar
+# isso), só registra o log num try/except separado.
+def registrar_evento_atividade_oficina(operador: str, area: str, peca_id: Optional[str], acao: str):
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, categoria, area) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), operador or "Sistema", peca_id, acao, "Atividade Oficina", area)
+            )
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️ Falha ao registrar evento de Atividade da Oficina na Central de Notificações: {e}")
+
+
 class PecaUpdate(BaseModel):
     id: str
     tipo: Optional[str] = None
@@ -1429,10 +1455,16 @@ class OficinaStatus(BaseModel):
     # "Recusado" — não dá pra só "passar por cima" de uma atividade
     # sem dizer por que não iniciou ou por que travou.
     motivo: Optional[str] = None
+    # 🆕 Opcional pra não quebrar cliente antigo — usado só pra assinar o
+    # registro na Central de Notificações (ver registrar_evento_
+    # atividade_oficina); "Sistema" quando não vier.
+    operador: Optional[str] = None
 
 
 class OficinaExcluir(BaseModel):
     id: int
+    # 🆕 Mesma ideia do OficinaStatus.operador acima — opcional.
+    operador: Optional[str] = None
 
 
 class OficinaAtividadeMensagem(BaseModel):
@@ -1589,6 +1621,8 @@ class OficinaAtividadeEditar(BaseModel):
     prazo: Optional[str] = None
     data_inicio: Optional[str] = None
     foto_base64: Optional[str] = None  # null = sem foto anexada / mantém a que já tinha, ver rota
+    # 🆕 Mesma ideia do OficinaStatus.operador — opcional.
+    operador: Optional[str] = None
 
 
 class OrdemServicoCriar(BaseModel):
@@ -2531,11 +2565,30 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
             FROM log_eventos e
             LEFT JOIN notificacoes_lidas l
                 ON l.tipo = 'evento' AND l.evento_id = e.id::text AND l.matricula = %s
-            WHERE e.categoria IS NOT NULL
+            WHERE e.categoria IS NOT NULL AND e.categoria != 'Atividade Oficina'
             ORDER BY e.id DESC
             LIMIT %s
         """, (matricula, limite))
         eventos = cursor.fetchall()
+
+        # 🆕 Toda ação numa atividade da Oficina (criar/mudar status/
+        # editar/excluir/mensagem) — ver registrar_evento_atividade_
+        # oficina. Categoria própria (não entra na query de Ocorrência
+        # acima) porque clicar nisso no front navega pra ÁREA
+        # (irParaAreaOficinaViaNotificacao), não pra Registro de
+        # Ocorrência.
+        cursor.execute("""
+            SELECT 'atividade' AS tipo, e.id::text AS evento_id, e.area, e.peca_id AS referencia,
+                   e.acao AS descricao, e.operador AS autor, e.data_hora,
+                   (l.matricula IS NOT NULL) AS lida
+            FROM log_eventos e
+            LEFT JOIN notificacoes_lidas l
+                ON l.tipo = 'atividade' AND l.evento_id = e.id::text AND l.matricula = %s
+            WHERE e.categoria = 'Atividade Oficina'
+            ORDER BY e.id DESC
+            LIMIT %s
+        """, (matricula, limite))
+        atividades_evt = cursor.fetchall()
 
         cursor.execute("""
             SELECT 'os' AS tipo, o.id::text AS evento_id, o.area, COALESCE(o.numero_os, o.id::text) AS referencia,
@@ -2597,7 +2650,7 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
         """, (matricula, limite))
         estoque = cursor.fetchall()
 
-    todos = list(eventos) + list(ordens) + list(achados) + list(estoque) + list(sinotico)
+    todos = list(eventos) + list(ordens) + list(achados) + list(estoque) + list(sinotico) + list(atividades_evt)
     todos.sort(key=lambda x: x["data_hora"] or "", reverse=True)
     return todos[:limite]
 
@@ -2802,6 +2855,17 @@ def criar_atividade_oficina(dados: OficinaAtividade):
             area=dados.area
         )
 
+    # 🆕 Registro persistente na Central de Notificações — ver
+    # registrar_evento_atividade_oficina. Ao contrário do push acima,
+    # isso vale MESMO pra atividade programada pro futuro (o push espera
+    # a data chegar, mas o registro de "isso foi criado" é imediato).
+    registrar_evento_atividade_oficina(
+        operador=dados.operador,
+        area=dados.area,
+        peca_id=dados.equipamento_id,
+        acao=f"{dados.operador} criou: {dados.descricao}"
+    )
+
     return {"sucesso": True, "id": atividade_id}
 
 
@@ -2852,23 +2916,35 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
     # no Checklist de Execução (tem solicitante_matricula). Uma
     # atividade criada direto no quadro da área não tem "quem pediu"
     # separado de quem executa, então não notifica ninguém aqui.
+    VERBOS_STATUS = {
+        "Em Andamento": "iniciou",
+        "Concluído": "concluiu",
+        "Recusado": "recusou",
+        "Aguardando": "colocou em espera",
+        "Pendente": "reabriu",
+    }
+    verbo = VERBOS_STATUS.get(dados.status, "atualizou")
     if linha["solicitante_matricula"]:
         tag = linha["equipamento_id"] or ""
         nome_area = AREA_OFICINA_NOMES.get(linha["area"], linha["area"])
-        VERBOS_STATUS = {
-            "Em Andamento": "iniciou",
-            "Concluído": "concluiu",
-            "Recusado": "recusou",
-            "Aguardando": "colocou em espera",
-            "Pendente": "reabriu",
-        }
-        verbo = VERBOS_STATUS.get(dados.status, "atualizou")
         enviar_push_para_matricula(
             matricula=linha["solicitante_matricula"],
             titulo=f"{nome_area} {verbo} sua atividade — {tag}",
             corpo=(f"Motivo: {motivo_status}" if motivo_status else "Sem observações."),
             url="/"
         )
+
+    # 🆕 Registro persistente na Central — TODA mudança de status, não
+    # só quando tem solicitante pra avisar (o push acima é sobre avisar
+    # UMA pessoa específica; isso aqui é o rastro na Central que
+    # qualquer ADM/técnico da área vê depois, com ou sem solicitante).
+    registrar_evento_atividade_oficina(
+        operador=dados.operador,
+        area=linha["area"],
+        peca_id=linha["equipamento_id"],
+        acao=f"{dados.operador or 'Alguém'} {verbo}: {linha['descricao']}" + (f" ({motivo_status})" if motivo_status else "")
+    )
+
     return {"sucesso": True}
 
 
@@ -2885,7 +2961,7 @@ def verificar_atrasos_oficina():
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, area, descricao, responsavel, prazo
+            SELECT id, area, descricao, responsavel, prazo, equipamento_id
             FROM oficina_atividades
             WHERE status != 'Concluído'
               AND prazo IS NOT NULL AND prazo != '' AND prazo < %s
@@ -2912,6 +2988,15 @@ def verificar_atrasos_oficina():
             titulo="⏰ Atividade atrasada",
             corpo=f"{nome_area} — {a['descricao']} (prazo era {a['prazo']}, ainda não concluída).",
             area=a["area"]
+        )
+        # 🆕 Registro persistente — atraso é detectado pelo sistema, não
+        # por uma ação de alguém, mas ainda é algo que "aconteceu" com a
+        # atividade e merece ficar marcável como lido na Central.
+        registrar_evento_atividade_oficina(
+            operador="Sistema",
+            area=a["area"],
+            peca_id=a["equipamento_id"],
+            acao=f"Atrasada: {a['descricao']} (prazo era {a['prazo']})"
         )
 
     return {"sucesso": True, "notificadas": len(atrasadas)}
@@ -2972,6 +3057,16 @@ def criar_mensagem_atividade_oficina(dados: OficinaAtividadeMensagem):
     # própria área (atividade criada direto no quadro) — não tem "outro
     # lado" fora da área pra avisar.
 
+    # 🆕 Registro persistente na Central — diferente do push acima (que
+    # só avisa "o outro lado"), isso fica visível pra qualquer ADM/
+    # técnico da área depois, mensagem de qualquer um dos dois lados.
+    registrar_evento_atividade_oficina(
+        operador=dados.autor_nome,
+        area=atividade["area"],
+        peca_id=atividade["equipamento_id"],
+        acao=f"{dados.autor_nome}: {dados.mensagem}"
+    )
+
     return {"sucesso": True, "id": novo_id}
 
 
@@ -3006,10 +3101,25 @@ def excluir_atividade_oficina(dados: OficinaExcluir):
         # sumia de lá. Agora as duas pontas se apagam juntas,
         # não importa por qual lado a exclusão começa.
         cursor.execute("DELETE FROM checklist_execucao_atividades_extra WHERE oficina_atividade_id = %s", (dados.id,))
-        cursor.execute("DELETE FROM oficina_atividades WHERE id = %s", (dados.id,))
-        if cursor.rowcount == 0:
+        cursor.execute(
+            "DELETE FROM oficina_atividades WHERE id = %s RETURNING area, equipamento_id, descricao",
+            (dados.id,)
+        )
+        linha = cursor.fetchone()
+        if not linha:
             raise HTTPException(status_code=404, detail="Atividade não encontrada.")
         conn.commit()
+
+    # 🆕 Registro persistente na Central — mesmo excluída, fica o rastro
+    # de que existiu e foi removida (senão a atividade só "some" sem
+    # explicação nenhuma pra quem não estava olhando bem na hora).
+    registrar_evento_atividade_oficina(
+        operador=dados.operador,
+        area=linha["area"],
+        peca_id=linha["equipamento_id"],
+        acao=f"{dados.operador or 'Alguém'} excluiu: {linha['descricao']}"
+    )
+
     return {"sucesso": True}
 
 
@@ -3144,13 +3254,25 @@ def editar_atividade_oficina(dados: OficinaAtividadeEditar):
             SET equipamento_id = %s, descricao = %s, responsavel = %s,
                 prioridade = %s, prazo = %s, data_inicio = %s, foto_base64 = %s
             WHERE id = %s
+            RETURNING area
             """,
             (dados.equipamento_id, dados.descricao, dados.responsavel,
              dados.prioridade or "Normal", dados.prazo, dados.data_inicio, dados.foto_base64, dados.id)
         )
-        if cursor.rowcount == 0:
+        linha = cursor.fetchone()
+        if not linha:
             raise HTTPException(status_code=404, detail="Atividade não encontrada.")
         conn.commit()
+
+    # 🆕 Registro persistente na Central — ver registrar_evento_
+    # atividade_oficina.
+    registrar_evento_atividade_oficina(
+        operador=dados.operador,
+        area=linha["area"],
+        peca_id=dados.equipamento_id,
+        acao=f"{dados.operador or 'Alguém'} editou: {dados.descricao}"
+    )
+
     return {"sucesso": True}
 
 # ==========================================
