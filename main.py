@@ -1271,6 +1271,34 @@ def registrar_evento_atividade_oficina(operador: str, area: str, peca_id: Option
         print(f"⚠️ Falha ao registrar evento de Atividade da Oficina na Central de Notificações: {e}")
 
 
+# 🐛 CORREÇÃO ("líder da Caldeiraria respondeu, técnico do Segmento de
+# Grupo que pediu a Atividade Extra não viu nada"): registrar_evento_
+# atividade_oficina acima sempre grava sob a ÁREA DONA da atividade
+# (quem vai EXECUTAR — ex: Caldeiraria). Isso é certo pra Caldeiraria/
+# ADM verem, mas quem PEDIU (solicitante_matricula, de uma área
+# diferente — ex: Segmento de Grupo) tem sua Central de Notificações
+# restrita à PRÓPRIA área (ver operadorTecnicoComArea no front) — um
+# evento só sob "caldeiraria" nunca aparece pra ele, não importa se leu
+# ou não. Busca a área cadastrada do solicitante e, se for diferente da
+# área dona, grava uma SEGUNDA linha sob a área dele também.
+def notificar_solicitante_atividade_oficina(solicitante_matricula: Optional[str], area_dona: str, peca_id: Optional[str], acao: str, operador: Optional[str]):
+    if not solicitante_matricula:
+        return
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT area FROM colaboradores WHERE matricula = %s", (solicitante_matricula,))
+            linha = cursor.fetchone()
+    except Exception as e:
+        print(f"⚠️ Falha ao buscar área do solicitante {solicitante_matricula}: {e}")
+        return
+    area_solicitante = linha["area"] if linha else None
+    # "Ambos"/vazio = sem área própria de verdade (ex: ADM) — ele já vê
+    # tudo de qualquer jeito, não precisa de linha duplicada.
+    if area_solicitante and area_solicitante not in (area_dona, "Ambos"):
+        registrar_evento_atividade_oficina(operador=operador, area=area_solicitante, peca_id=peca_id, acao=acao)
+
+
 class PecaUpdate(BaseModel):
     id: str
     tipo: Optional[str] = None
@@ -2938,11 +2966,24 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
     # só quando tem solicitante pra avisar (o push acima é sobre avisar
     # UMA pessoa específica; isso aqui é o rastro na Central que
     # qualquer ADM/técnico da área vê depois, com ou sem solicitante).
+    acao_texto = f"{dados.operador or 'Alguém'} {verbo}: {linha['descricao']}" + (f" ({motivo_status})" if motivo_status else "")
     registrar_evento_atividade_oficina(
         operador=dados.operador,
         area=linha["area"],
         peca_id=linha["equipamento_id"],
-        acao=f"{dados.operador or 'Alguém'} {verbo}: {linha['descricao']}" + (f" ({motivo_status})" if motivo_status else "")
+        acao=acao_texto
+    )
+    # 🐛 CORREÇÃO: sem isso, quem PEDIU a atividade (solicitante_
+    # matricula, de outra área) nunca via essa mudança de status na
+    # própria Central — só ADM/quem é da área dona via ("líder da
+    # Caldeiraria mudou status, técnico do Segmento de Grupo que pediu
+    # não via nada"). Ver notificar_solicitante_atividade_oficina.
+    notificar_solicitante_atividade_oficina(
+        solicitante_matricula=linha["solicitante_matricula"],
+        area_dona=linha["area"],
+        peca_id=linha["equipamento_id"],
+        acao=acao_texto,
+        operador=dados.operador
     )
 
     return {"sucesso": True}
@@ -3060,12 +3101,27 @@ def criar_mensagem_atividade_oficina(dados: OficinaAtividadeMensagem):
     # 🆕 Registro persistente na Central — diferente do push acima (que
     # só avisa "o outro lado"), isso fica visível pra qualquer ADM/
     # técnico da área depois, mensagem de qualquer um dos dois lados.
+    acao_texto = f"{dados.autor_nome}: {dados.mensagem}"
     registrar_evento_atividade_oficina(
         operador=dados.autor_nome,
         area=atividade["area"],
         peca_id=atividade["equipamento_id"],
-        acao=f"{dados.autor_nome}: {dados.mensagem}"
+        acao=acao_texto
     )
+    # 🐛 CORREÇÃO ("líder da Caldeiraria respondeu, técnico do Segmento
+    # de Grupo que pediu não viu a mensagem na própria Central"): sem
+    # isso, a linha acima só aparece sob a área DONA da atividade
+    # (Caldeiraria) — invisível pra quem pediu, restrito à própria área.
+    # Só duplica quando quem escreveu NÃO é o próprio solicitante (senão
+    # ele veria a própria mensagem "chegando" pra ele mesmo).
+    if not eh_o_solicitante_escrevendo:
+        notificar_solicitante_atividade_oficina(
+            solicitante_matricula=atividade["solicitante_matricula"],
+            area_dona=atividade["area"],
+            peca_id=atividade["equipamento_id"],
+            acao=acao_texto,
+            operador=dados.autor_nome
+        )
 
     return {"sucesso": True, "id": novo_id}
 
@@ -3102,7 +3158,7 @@ def excluir_atividade_oficina(dados: OficinaExcluir):
         # não importa por qual lado a exclusão começa.
         cursor.execute("DELETE FROM checklist_execucao_atividades_extra WHERE oficina_atividade_id = %s", (dados.id,))
         cursor.execute(
-            "DELETE FROM oficina_atividades WHERE id = %s RETURNING area, equipamento_id, descricao",
+            "DELETE FROM oficina_atividades WHERE id = %s RETURNING area, equipamento_id, descricao, solicitante_matricula",
             (dados.id,)
         )
         linha = cursor.fetchone()
@@ -3113,11 +3169,21 @@ def excluir_atividade_oficina(dados: OficinaExcluir):
     # 🆕 Registro persistente na Central — mesmo excluída, fica o rastro
     # de que existiu e foi removida (senão a atividade só "some" sem
     # explicação nenhuma pra quem não estava olhando bem na hora).
+    acao_texto = f"{dados.operador or 'Alguém'} excluiu: {linha['descricao']}"
     registrar_evento_atividade_oficina(
         operador=dados.operador,
         area=linha["area"],
         peca_id=linha["equipamento_id"],
-        acao=f"{dados.operador or 'Alguém'} excluiu: {linha['descricao']}"
+        acao=acao_texto
+    )
+    # 🐛 CORREÇÃO: mesma lacuna do mudar_status — quem pediu (de outra
+    # área) não via a exclusão na própria Central.
+    notificar_solicitante_atividade_oficina(
+        solicitante_matricula=linha["solicitante_matricula"],
+        area_dona=linha["area"],
+        peca_id=linha["equipamento_id"],
+        acao=acao_texto,
+        operador=dados.operador
     )
 
     return {"sucesso": True}
@@ -3254,7 +3320,7 @@ def editar_atividade_oficina(dados: OficinaAtividadeEditar):
             SET equipamento_id = %s, descricao = %s, responsavel = %s,
                 prioridade = %s, prazo = %s, data_inicio = %s, foto_base64 = %s
             WHERE id = %s
-            RETURNING area
+            RETURNING area, solicitante_matricula
             """,
             (dados.equipamento_id, dados.descricao, dados.responsavel,
              dados.prioridade or "Normal", dados.prazo, dados.data_inicio, dados.foto_base64, dados.id)
@@ -3266,11 +3332,21 @@ def editar_atividade_oficina(dados: OficinaAtividadeEditar):
 
     # 🆕 Registro persistente na Central — ver registrar_evento_
     # atividade_oficina.
+    acao_texto = f"{dados.operador or 'Alguém'} editou: {dados.descricao}"
     registrar_evento_atividade_oficina(
         operador=dados.operador,
         area=linha["area"],
         peca_id=dados.equipamento_id,
-        acao=f"{dados.operador or 'Alguém'} editou: {dados.descricao}"
+        acao=acao_texto
+    )
+    # 🐛 CORREÇÃO: mesma lacuna do mudar_status — quem pediu (de outra
+    # área) não via a edição na própria Central.
+    notificar_solicitante_atividade_oficina(
+        solicitante_matricula=linha["solicitante_matricula"],
+        area_dona=linha["area"],
+        peca_id=dados.equipamento_id,
+        acao=acao_texto,
+        operador=dados.operador
     )
 
     return {"sucesso": True}
