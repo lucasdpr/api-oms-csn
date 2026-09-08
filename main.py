@@ -485,6 +485,15 @@ def init_db():
         # pessoa ter que procurar o card certo pra clicar no balão de
         # chat. NULL pra todo o resto (Ocorrência, OS, achado...).
         cursor.execute('''ALTER TABLE log_eventos ADD COLUMN IF NOT EXISTS atividade_id INTEGER''')
+        # 🆕 Classifica o evento de Atividade Oficina pra saber pra ONDE o
+        # clique na Central de Notificações deve levar: 'mensagem' abre a
+        # Conversa da Atividade, enquanto 'status'/'criacao'/'edicao'
+        # abrem a Atividade em si (o técnico não precisa entrar no chat
+        # só pra ver que a peça mudou de status). NULL pro resto dos
+        # tipos de evento (Ocorrência, OS, achado, sinótico, estoque) —
+        # esses já têm rota própria fixa no front (ver
+        # abrirItemNotificacao). Ver registrar_evento_atividade_oficina.
+        cursor.execute('''ALTER TABLE log_eventos ADD COLUMN IF NOT EXISTS tipo_evento TEXT''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS colaboradores (
@@ -1275,14 +1284,19 @@ def enviar_push_para_matricula(matricula: str, titulo: str, corpo: str, url: str
 # Mesmo padrão de robustez do evento de mancal do Sinótico 3D: nunca
 # deve derrubar a ação principal (que já foi commitada antes de chamar
 # isso), só registra o log num try/except separado.
-def registrar_evento_atividade_oficina(operador: str, area: str, peca_id: Optional[str], acao: str, atividade_id: Optional[int] = None):
+def registrar_evento_atividade_oficina(operador: str, area: str, peca_id: Optional[str], acao: str, atividade_id: Optional[int] = None, tipo_evento: str = "status"):
+    """`tipo_evento` diz pro front-end pra onde o clique na notificação
+    deve levar: 'mensagem' (Conversa da Atividade) ou 'status'/'criacao'/
+    'edicao' (a Atividade em si) — ver comentário da coluna tipo_evento
+    em log_eventos. Default 'status' porque é o caso mais comum
+    (mudar_status_atividade_oficina, atraso automático)."""
     try:
         with get_db() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, categoria, area, atividade_id) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), operador or "Sistema", peca_id, acao, "Atividade Oficina", area, atividade_id)
+                "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, categoria, area, atividade_id, tipo_evento) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), operador or "Sistema", peca_id, acao, "Atividade Oficina", area, atividade_id, tipo_evento)
             )
             conn.commit()
     except Exception as e:
@@ -1326,7 +1340,7 @@ def _buscar_area_origem_checklist_extra(cursor, oficina_atividade_id: Optional[i
 #      Molde MCC4) também precisa saber, não só esse indivíduo.
 # Por isso notifica as DUAS áreas extras (solicitante + origem do
 # checklist), sem duplicar quando coincidem entre si ou com a área dona.
-def notificar_areas_extras_atividade_oficina(oficina_atividade_id: Optional[int], solicitante_matricula: Optional[str], area_dona: str, peca_id: Optional[str], acao: str, operador: Optional[str]):
+def notificar_areas_extras_atividade_oficina(oficina_atividade_id: Optional[int], solicitante_matricula: Optional[str], area_dona: str, peca_id: Optional[str], acao: str, operador: Optional[str], tipo_evento: str = "status"):
     areas_extras = set()
     try:
         with get_db() as conn:
@@ -1352,7 +1366,7 @@ def notificar_areas_extras_atividade_oficina(oficina_atividade_id: Optional[int]
     areas_extras.discard(area_dona)
     areas_extras.discard("Ambos")
     for area in areas_extras:
-        registrar_evento_atividade_oficina(operador=operador, area=area, peca_id=peca_id, acao=acao, atividade_id=oficina_atividade_id)
+        registrar_evento_atividade_oficina(operador=operador, area=area, peca_id=peca_id, acao=acao, atividade_id=oficina_atividade_id, tipo_evento=tipo_evento)
 
 
 class PecaUpdate(BaseModel):
@@ -2664,6 +2678,7 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
         cursor.execute("""
             SELECT 'atividade' AS tipo, e.id::text AS evento_id, e.area, e.peca_id AS referencia,
                    e.acao AS descricao, e.operador AS autor, e.data_hora, e.atividade_id,
+                   COALESCE(e.tipo_evento, 'status') AS tipo_evento,
                    (l.matricula IS NOT NULL) AS lida
             FROM log_eventos e
             LEFT JOIN notificacoes_lidas l
@@ -2948,7 +2963,8 @@ def criar_atividade_oficina(dados: OficinaAtividade):
         area=dados.area,
         peca_id=dados.equipamento_id,
         acao=f"{dados.operador} criou: {dados.descricao}",
-        atividade_id=atividade_id
+        atividade_id=atividade_id,
+        tipo_evento="criacao"
     )
 
     return {"sucesso": True, "id": atividade_id}
@@ -3176,7 +3192,8 @@ def criar_mensagem_atividade_oficina(dados: OficinaAtividadeMensagem):
         area=atividade["area"],
         peca_id=atividade["equipamento_id"],
         acao=acao_texto,
-        atividade_id=dados.atividade_id
+        atividade_id=dados.atividade_id,
+        tipo_evento="mensagem"
     )
     # 🐛 CORREÇÃO ("líder da Caldeiraria respondeu, ninguém do lado de
     # quem pediu viu a mensagem na própria Central"): sem isso, a linha
@@ -3192,7 +3209,8 @@ def criar_mensagem_atividade_oficina(dados: OficinaAtividadeMensagem):
             area_dona=atividade["area"],
             peca_id=atividade["equipamento_id"],
             acao=acao_texto,
-            operador=dados.autor_nome
+            operador=dados.autor_nome,
+            tipo_evento="mensagem"
         )
 
     return {"sucesso": True, "id": novo_id}
@@ -3246,7 +3264,8 @@ def excluir_atividade_oficina(dados: OficinaExcluir):
         operador=dados.operador,
         area=linha["area"],
         peca_id=linha["equipamento_id"],
-        acao=acao_texto
+        acao=acao_texto,
+        tipo_evento="edicao"
     )
     # 🐛 CORREÇÃO: mesma lacuna do mudar_status — quem pediu (de outra
     # área) e a área de origem do checklist não viam a exclusão na
@@ -3257,7 +3276,8 @@ def excluir_atividade_oficina(dados: OficinaExcluir):
         area_dona=linha["area"],
         peca_id=linha["equipamento_id"],
         acao=acao_texto,
-        operador=dados.operador
+        operador=dados.operador,
+        tipo_evento="edicao"
     )
 
     return {"sucesso": True}
@@ -3412,7 +3432,8 @@ def editar_atividade_oficina(dados: OficinaAtividadeEditar):
         area=linha["area"],
         peca_id=dados.equipamento_id,
         acao=acao_texto,
-        atividade_id=dados.id
+        atividade_id=dados.id,
+        tipo_evento="edicao"
     )
     # 🐛 CORREÇÃO: mesma lacuna do mudar_status — quem pediu (de outra
     # área) e a área de origem do checklist não viam a edição na própria
@@ -3423,7 +3444,8 @@ def editar_atividade_oficina(dados: OficinaAtividadeEditar):
         area_dona=linha["area"],
         peca_id=dados.equipamento_id,
         acao=acao_texto,
-        operador=dados.operador
+        operador=dados.operador,
+        tipo_evento="edicao"
     )
 
     return {"sucesso": True}
@@ -4031,7 +4053,8 @@ def registrar_atividade_extra_checklist_execucao(dados: ChecklistExecucaoAtivida
             area=area_origem,
             peca_id=dados.equipamento_id,
             acao=f"{dados.operador_nome} pediu ajuda de {nome_area_destino}: {dados.descricao}",
-            atividade_id=oficina_atividade_id
+            atividade_id=oficina_atividade_id,
+            tipo_evento="criacao"
         )
 
     return {"sucesso": True, "id": novo_id, "oficina_atividade_id": oficina_atividade_id}
