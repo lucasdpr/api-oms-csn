@@ -3012,10 +3012,19 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
     if linha["solicitante_matricula"]:
         tag = linha["equipamento_id"] or ""
         nome_area = AREA_OFICINA_NOMES.get(linha["area"], linha["area"])
+        # 🐛 CORRIGIDO ("notificação de 'iniciou atividade' aparece com
+        # 'sem observação' escrito literalmente"): motivo só é
+        # OBRIGATÓRIO pra Recusado/Aguardando (ver validação lá em cima)
+        # — pra Iniciar/Concluir/Reabrir é normal não ter nada, e antes
+        # isso virava um corpo de push genérico e feio ("Sem
+        # observações."). Agora, sem motivo, o corpo conta a descrição
+        # da própria atividade (informação de verdade) em vez de um
+        # texto vazio de preenchimento.
+        corpo = f"Motivo: {motivo_status}" if motivo_status else (linha["descricao"] or f"{tag} — {nome_area}")
         enviar_push_para_matricula(
             matricula=linha["solicitante_matricula"],
             titulo=f"{nome_area} {verbo} sua atividade — {tag}",
-            corpo=(f"Motivo: {motivo_status}" if motivo_status else "Sem observações."),
+            corpo=corpo,
             url="/"
         )
 
