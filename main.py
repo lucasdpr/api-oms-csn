@@ -1607,6 +1607,12 @@ class OficinaStatus(BaseModel):
     # grupo. Opcional: se não vier, cai no comportamento antigo (usa o
     # próprio `operador` como executor).
     colaboradores: Optional[str] = None
+    # 🆕 Reabertura de atividade Concluída (volta pra "Em Andamento"):
+    # marca essa transição como reabertura pra exigir motivo e gerar um
+    # tipo_evento próprio na Central ("reabertura"), diferente de um
+    # Iniciar normal. Sem isso, `motivo` continuaria opcional pra
+    # qualquer "Em Andamento" — ver validação abaixo.
+    reabertura: Optional[bool] = None
 
 
 class OficinaExcluir(BaseModel):
@@ -3048,6 +3054,12 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
     # (Aguardando, ex: aguardando material chegar).
     if dados.status in ("Recusado", "Aguardando") and not (dados.motivo or "").strip():
         raise HTTPException(status_code=400, detail=f"Status \"{dados.status}\" precisa de um motivo.")
+    # 🆕 Reabrir uma atividade Concluída também exige motivo — mesma
+    # lógica de Recusado/Aguardando: não dá pra "passar por cima" e
+    # mandar de volta pra produção sem dizer por quê (ver front em
+    # window.reabrirAtividadeOficina).
+    if dados.reabertura and not (dados.motivo or "").strip():
+        raise HTTPException(status_code=400, detail="Reabertura precisa de um motivo.")
 
     agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     concluido_em = agora if dados.status == "Concluído" else None
@@ -3106,7 +3118,7 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
         "Aguardando": "colocou em espera",
         "Pendente": "reabriu",
     }
-    verbo = VERBOS_STATUS.get(dados.status, "atualizou")
+    verbo = "reabriu" if dados.reabertura else VERBOS_STATUS.get(dados.status, "atualizou")
     if linha["solicitante_matricula"]:
         tag = linha["equipamento_id"] or ""
         nome_area = AREA_OFICINA_NOMES.get(linha["area"], linha["area"])
@@ -3137,7 +3149,8 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
         area=linha["area"],
         peca_id=linha["equipamento_id"],
         acao=acao_texto,
-        atividade_id=dados.id
+        atividade_id=dados.id,
+        tipo_evento="reabertura" if dados.reabertura else "status"
     )
     # 🐛 CORREÇÃO: sem isso, quem PEDIU a atividade (solicitante_
     # matricula, de outra área) e o resto da equipe da área de ORIGEM do
