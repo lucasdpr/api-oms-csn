@@ -1287,14 +1287,22 @@ def notificar_solicitante_atividade_oficina(solicitante_matricula: Optional[str]
     try:
         with get_db() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT area FROM colaboradores WHERE matricula = %s", (solicitante_matricula,))
-            linha = cursor.fetchone()
+            # 🐛 CORRIGIDO ("segunda mensagem, ainda não apareceu"): a
+            # primeira versão buscava em colaboradores.area — coluna que
+            # NUNCA é escrita por nenhuma rota deste backend (fica
+            # parada no DEFAULT 'Ambos' pra todo mundo). A área de
+            # verdade do colaborador mora em equipe_oficina (mesma
+            # tabela que o login usa via _buscar_area_colaborador — ver
+            # login_colaborador logo abaixo) — sem essa correção,
+            # area_solicitante era sempre 'Ambos' e a linha duplicada
+            # nunca era gravada pra ninguém.
+            area_solicitante = _buscar_area_colaborador(cursor, solicitante_matricula)
     except Exception as e:
         print(f"⚠️ Falha ao buscar área do solicitante {solicitante_matricula}: {e}")
         return
-    area_solicitante = linha["area"] if linha else None
-    # "Ambos"/vazio = sem área própria de verdade (ex: ADM) — ele já vê
-    # tudo de qualquer jeito, não precisa de linha duplicada.
+    # None/"Ambos" = sem área própria de verdade (ex: ADM, ou matrícula
+    # não cadastrada em equipe_oficina) — ele já vê tudo (ADM) ou não
+    # tem Central restrita nenhuma pra alimentar, não precisa duplicar.
     if area_solicitante and area_solicitante not in (area_dona, "Ambos"):
         registrar_evento_atividade_oficina(operador=operador, area=area_solicitante, peca_id=peca_id, acao=acao)
 
