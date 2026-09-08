@@ -478,6 +478,13 @@ def init_db():
         # dar contexto na Central de Notificações sem precisar adivinhar
         # a área a partir do equipamento.
         cursor.execute('''ALTER TABLE log_eventos ADD COLUMN IF NOT EXISTS area TEXT''')
+        # 🆕 Id da oficina_atividades quando o evento é sobre uma
+        # Atividade da Oficina (categoria='Atividade Oficina') — permite
+        # a Central de Notificações abrir a "Conversa da Atividade" DIRETO
+        # ao clicar, em vez de só levar pro quadro geral da área e a
+        # pessoa ter que procurar o card certo pra clicar no balão de
+        # chat. NULL pra todo o resto (Ocorrência, OS, achado...).
+        cursor.execute('''ALTER TABLE log_eventos ADD COLUMN IF NOT EXISTS atividade_id INTEGER''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS colaboradores (
@@ -1257,14 +1264,14 @@ def enviar_push_para_matricula(matricula: str, titulo: str, corpo: str, url: str
 # Mesmo padrão de robustez do evento de mancal do Sinótico 3D: nunca
 # deve derrubar a ação principal (que já foi commitada antes de chamar
 # isso), só registra o log num try/except separado.
-def registrar_evento_atividade_oficina(operador: str, area: str, peca_id: Optional[str], acao: str):
+def registrar_evento_atividade_oficina(operador: str, area: str, peca_id: Optional[str], acao: str, atividade_id: Optional[int] = None):
     try:
         with get_db() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, categoria, area) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
-                (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), operador or "Sistema", peca_id, acao, "Atividade Oficina", area)
+                "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, categoria, area, atividade_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), operador or "Sistema", peca_id, acao, "Atividade Oficina", area, atividade_id)
             )
             conn.commit()
     except Exception as e:
@@ -1334,7 +1341,7 @@ def notificar_areas_extras_atividade_oficina(oficina_atividade_id: Optional[int]
     areas_extras.discard(area_dona)
     areas_extras.discard("Ambos")
     for area in areas_extras:
-        registrar_evento_atividade_oficina(operador=operador, area=area, peca_id=peca_id, acao=acao)
+        registrar_evento_atividade_oficina(operador=operador, area=area, peca_id=peca_id, acao=acao, atividade_id=oficina_atividade_id)
 
 
 class PecaUpdate(BaseModel):
@@ -2640,12 +2647,12 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
         # 🆕 Toda ação numa atividade da Oficina (criar/mudar status/
         # editar/excluir/mensagem) — ver registrar_evento_atividade_
         # oficina. Categoria própria (não entra na query de Ocorrência
-        # acima) porque clicar nisso no front navega pra ÁREA
-        # (irParaAreaOficinaViaNotificacao), não pra Registro de
-        # Ocorrência.
+        # acima) porque clicar nisso no front abre a "Conversa da
+        # Atividade" direto (via atividade_id, quando presente) em vez
+        # de ir pro Registro de Ocorrência.
         cursor.execute("""
             SELECT 'atividade' AS tipo, e.id::text AS evento_id, e.area, e.peca_id AS referencia,
-                   e.acao AS descricao, e.operador AS autor, e.data_hora,
+                   e.acao AS descricao, e.operador AS autor, e.data_hora, e.atividade_id,
                    (l.matricula IS NOT NULL) AS lida
             FROM log_eventos e
             LEFT JOIN notificacoes_lidas l
@@ -2929,7 +2936,8 @@ def criar_atividade_oficina(dados: OficinaAtividade):
         operador=dados.operador,
         area=dados.area,
         peca_id=dados.equipamento_id,
-        acao=f"{dados.operador} criou: {dados.descricao}"
+        acao=f"{dados.operador} criou: {dados.descricao}",
+        atividade_id=atividade_id
     )
 
     return {"sucesso": True, "id": atividade_id}
@@ -3009,7 +3017,8 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
         operador=dados.operador,
         area=linha["area"],
         peca_id=linha["equipamento_id"],
-        acao=acao_texto
+        acao=acao_texto,
+        atividade_id=dados.id
     )
     # 🐛 CORREÇÃO: sem isso, quem PEDIU a atividade (solicitante_
     # matricula, de outra área) e o resto da equipe da área de ORIGEM do
@@ -3076,7 +3085,8 @@ def verificar_atrasos_oficina():
             operador="Sistema",
             area=a["area"],
             peca_id=a["equipamento_id"],
-            acao=f"Atrasada: {a['descricao']} (prazo era {a['prazo']})"
+            acao=f"Atrasada: {a['descricao']} (prazo era {a['prazo']})",
+            atividade_id=a["id"]
         )
 
     return {"sucesso": True, "notificadas": len(atrasadas)}
@@ -3145,7 +3155,8 @@ def criar_mensagem_atividade_oficina(dados: OficinaAtividadeMensagem):
         operador=dados.autor_nome,
         area=atividade["area"],
         peca_id=atividade["equipamento_id"],
-        acao=acao_texto
+        acao=acao_texto,
+        atividade_id=dados.atividade_id
     )
     # 🐛 CORREÇÃO ("líder da Caldeiraria respondeu, ninguém do lado de
     # quem pediu viu a mensagem na própria Central"): sem isso, a linha
@@ -3380,7 +3391,8 @@ def editar_atividade_oficina(dados: OficinaAtividadeEditar):
         operador=dados.operador,
         area=linha["area"],
         peca_id=dados.equipamento_id,
-        acao=acao_texto
+        acao=acao_texto,
+        atividade_id=dados.id
     )
     # 🐛 CORREÇÃO: mesma lacuna do mudar_status — quem pediu (de outra
     # área) e a área de origem do checklist não viam a edição na própria
@@ -3998,7 +4010,8 @@ def registrar_atividade_extra_checklist_execucao(dados: ChecklistExecucaoAtivida
             operador=dados.operador_nome,
             area=area_origem,
             peca_id=dados.equipamento_id,
-            acao=f"{dados.operador_nome} pediu ajuda de {nome_area_destino}: {dados.descricao}"
+            acao=f"{dados.operador_nome} pediu ajuda de {nome_area_destino}: {dados.descricao}",
+            atividade_id=oficina_atividade_id
         )
 
     return {"sucesso": True, "id": novo_id, "oficina_atividade_id": oficina_atividade_id}
