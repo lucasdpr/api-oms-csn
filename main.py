@@ -654,6 +654,18 @@ def init_db():
         cursor.execute('''
             ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS solicitante_matricula TEXT
         ''')
+        # 🆕 Nome de quem está EXECUTANDO a atividade agora — "responsavel"
+        # é um campo livre digitado na criação/edição (pode nem ser
+        # preenchido, e não muda sozinho), então não dava pra saber quem
+        # de fato pegou o serviço. Preenchido com o nome de quem mudou o
+        # status pra "Em Andamento" (ver mudar_status_atividade_oficina)
+        # — é o jeito mais simples de capturar "quem tá executando" sem
+        # inventar um fluxo de "assumir atividade" novo. Importante pro
+        # solicitante de outra área ver não só a ÁREA que tá cuidando do
+        # pedido, mas a PESSOA.
+        cursor.execute('''
+            ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS executado_por TEXT
+        ''')
 
         # 🆕 CONVERSA DA ATIVIDADE — thread de mensagens de mão dupla
         # numa atividade específica. Sem isso, o único jeito de "avisar"
@@ -2902,15 +2914,30 @@ def listar_atividades_oficina(area: Optional[str] = None, status: Optional[str] 
     """
     with get_db() as conn:
         cursor = conn.cursor()
-        query = "SELECT * FROM oficina_atividades WHERE 1=1"
+        # 🆕 CORRIGIDO ("quem pediu a atividade extra some da própria
+        # área quando outra equipe assume"): "area" na tabela é sempre
+        # quem EXECUTA — pra quem pediu (solicitante_matricula) ver a
+        # atividade no PRÓPRIO quadro mesmo sendo executada por outra
+        # área, o front precisa saber qual é a área do solicitante.
+        # LEFT JOIN com equipe_oficina (mesma fonte de área usada em
+        # _buscar_area_colaborador) só pra trazer esse dado a mais —
+        # não filtra nada aqui, o filtro por área continua sendo feito
+        # no front-end pra montar a grade (ver comentário acima).
+        query = """
+            SELECT oa.*, eo.area AS solicitante_area
+            FROM oficina_atividades oa
+            LEFT JOIN equipe_oficina eo
+                ON eo.matricula = oa.solicitante_matricula AND eo.ativo = TRUE
+            WHERE 1=1
+        """
         params = []
         if area:
-            query += " AND area = %s"
+            query += " AND oa.area = %s"
             params.append(area)
         if status:
-            query += " AND status = %s"
+            query += " AND oa.status = %s"
             params.append(status)
-        query += " ORDER BY id DESC LIMIT %s"
+        query += " ORDER BY oa.id DESC LIMIT %s"
         params.append(limite)
         cursor.execute(query, params)
         return cursor.fetchall()
@@ -2996,12 +3023,22 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
         # concluída, por exemplo), reseta o aviso de atraso — se ela
         # ficar atrasada de novo, precisa poder notificar de novo.
         resetar_notificacao = dados.status != "Concluído"
+        # 🆕 Guarda quem EXECUTA a atividade a partir do momento que ela
+        # entra "Em Andamento" — ver comentário da coluna executado_por.
+        # Não sobrescreve em Concluir/Recusar/Aguardar/Reabrir (mantém o
+        # nome de quem pegou o serviço da última vez que foi iniciada).
+        set_executor = ", executado_por = %s" if dados.status == "Em Andamento" else ""
+        params = [dados.status, concluido_em, motivo_status]
+        if set_executor:
+            params.append(dados.operador)
+        params.append(dados.id)
         cursor.execute(
             "UPDATE oficina_atividades SET status = %s, concluido_em = %s, motivo_status = %s"
+            + set_executor
             + (", notificado_atraso = FALSE" if resetar_notificacao else "")
             + " WHERE id = %s"
-            + " RETURNING equipamento_id, descricao, area, solicitante_matricula",
-            (dados.status, concluido_em, motivo_status, dados.id)
+            + " RETURNING equipamento_id, descricao, area, solicitante_matricula, executado_por",
+            params
         )
         linha = cursor.fetchone()
         if not linha:
