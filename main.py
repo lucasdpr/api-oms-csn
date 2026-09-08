@@ -1598,6 +1598,15 @@ class OficinaStatus(BaseModel):
     # registro na Central de Notificações (ver registrar_evento_
     # atividade_oficina); "Sistema" quando não vier.
     operador: Optional[str] = None
+    # 🆕 Quem de fato vai EXECUTAR a atividade a partir de "Em Andamento"
+    # — pode ser mais de um nome (mesmo modal de seleção de colaboradores
+    # do Checklist de Execução, front manda os nomes já juntados numa
+    # string tipo "Fulano, Ciclano"). Diferente de `operador` (sempre o
+    # técnico logado que clicou o botão, usado pra assinar o log) —
+    # `colaboradores` é quem realmente pegou o serviço, podendo ser um
+    # grupo. Opcional: se não vier, cai no comportamento antigo (usa o
+    # próprio `operador` como executor).
+    colaboradores: Optional[str] = None
 
 
 class OficinaExcluir(BaseModel):
@@ -3063,7 +3072,10 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
         set_executor = ", executado_por = %s" if dados.status == "Em Andamento" else ""
         params = [dados.status, concluido_em, motivo_status]
         if set_executor:
-            params.append(dados.operador)
+            # 🆕 Prioriza os colaboradores escolhidos no modal (pode ser
+            # mais de um nome); sem isso, mantém o comportamento antigo
+            # de gravar só quem clicou (dados.operador).
+            params.append((dados.colaboradores or "").strip() or dados.operador)
         params.append(dados.id)
         cursor.execute(
             "UPDATE oficina_atividades SET status = %s, concluido_em = %s, motivo_status = %s"
