@@ -3116,6 +3116,20 @@ def criar_atividade_oficina(dados: OficinaAtividade):
         atividade_id=atividade_id,
         tipo_evento="criacao"
     )
+    # 🐛 CORRIGIDO: mudar_status/editar/excluir/mensagem já chamam
+    # notificar_areas_extras_atividade_oficina (pra o solicitante de
+    # outra área ver o evento na própria Central), mas a criação nunca
+    # chamava — o solicitante só passava a ver a atividade a partir da
+    # PRIMEIRA mudança de status, não desde que ela foi criada.
+    notificar_areas_extras_atividade_oficina(
+        oficina_atividade_id=atividade_id,
+        solicitante_matricula=dados.solicitante_matricula,
+        area_dona=dados.area,
+        peca_id=dados.equipamento_id,
+        acao=f"{dados.operador} criou: {dados.descricao}",
+        operador=dados.operador,
+        tipo_evento="criacao"
+    )
 
     return {"sucesso": True, "id": atividade_id}
 
@@ -3154,8 +3168,17 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
         # linha no histórico (oficina_atividades_reaberturas) com o que a
         # atividade TINHA — ver comentário da tabela no schema.
         if dados.reabertura:
+            # 🐛 CORRIGIDO (corrida em reabertura dupla): sem FOR UPDATE,
+            # dois cliques quase simultâneos de Reabrir na mesma
+            # atividade (ex: solicitante e executor, já que o botão
+            # aparece nos dois quadros) podiam ler o MESMO "anterior"
+            # antes de qualquer um commitar — as duas linhas de
+            # histórico ficavam com o mesmo concluido_em/motivo_status,
+            # mesmo a segunda reabertura devendo refletir o que a
+            # primeira já tinha gravado. FOR UPDATE trava a linha até o
+            # commit desta transação, serializando as duas.
             cursor.execute(
-                "SELECT concluido_em, motivo_status, executado_por FROM oficina_atividades WHERE id = %s",
+                "SELECT concluido_em, motivo_status, executado_por FROM oficina_atividades WHERE id = %s FOR UPDATE",
                 (dados.id,)
             )
             anterior = cursor.fetchone()
@@ -3283,7 +3306,14 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
         area_dona=linha["area"],
         peca_id=linha["equipamento_id"],
         acao=acao_texto,
-        operador=dados.operador
+        operador=dados.operador,
+        # 🐛 CORRIGIDO: faltava aqui — a cópia desse evento registrada
+        # pra área DONA (registrar_evento_atividade_oficina acima) já
+        # ficava marcada "reabertura" numa reabertura, mas a cópia pras
+        # áreas EXTRAS (solicitante/origem do checklist) caía sempre no
+        # default "status", classificando o mesmo evento lógico de
+        # jeitos diferentes dependendo de qual área olha a Central.
+        tipo_evento="reabertura" if dados.reabertura else "status"
     )
 
     return {"sucesso": True}
