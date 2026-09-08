@@ -4038,10 +4038,17 @@ def registrar_atividade_extra_checklist_execucao(dados: ChecklistExecucaoAtivida
     # verdade (mesma função do botão "+ Nova Atividade" de cada área) —
     # reaproveita o push que ela já dispara, então NÃO manda um segundo
     # aviso separado aqui.
+    # 🐛 CORRIGIDO ("nome mostrado pro técnico é 'Checklist de Execução'
+    # genérico, não o equipamento"): o prefixo "[Checklist de Execução]"
+    # aqui virava a DESCRIÇÃO da atividade — que é o texto de destaque
+    # no card (ver renderizarAtividadesArea no front). O equipamento já
+    # tem campo próprio (equipamento_id, mostrado como tag no card); o
+    # prefixo só duplicava informação genérica e escondia a descrição de
+    # verdade atrás de um rótulo igual em toda atividade extra.
     atividade_oficina = criar_atividade_oficina(OficinaAtividade(
         area=dados.area,
         equipamento_id=dados.equipamento_id,
-        descricao=f"[Checklist de Execução] {dados.descricao}",
+        descricao=dados.descricao,
         operador=dados.operador_nome,
         solicitante_matricula=dados.operador_matricula,
     ))
