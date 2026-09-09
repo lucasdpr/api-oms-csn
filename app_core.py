@@ -1079,6 +1079,31 @@ def init_db():
             )
         ''')
 
+        # 📢 AVISOS DO SISTEMA — comunicado criado pelo ADM (ex: "treinamento
+        # disponível") que todo colaborador precisa ver e confirmar leitura
+        # ao entrar no sistema. `ativo=FALSE` é um "arquivar" sem apagar o
+        # histórico de quem já leu (soft delete).
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS avisos_sistema (
+                id SERIAL PRIMARY KEY,
+                titulo TEXT NOT NULL,
+                mensagem TEXT NOT NULL,
+                criado_por TEXT,
+                criado_em TEXT NOT NULL,
+                ativo BOOLEAN DEFAULT TRUE
+            )
+        ''')
+        # Uma linha por (aviso, matrícula) que já confirmou ter lido — TEXT
+        # pra data (lido_em), mesmo padrão de notificacoes_lidas acima.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS avisos_leitura (
+                aviso_id INTEGER NOT NULL REFERENCES avisos_sistema(id) ON DELETE CASCADE,
+                matricula TEXT NOT NULL,
+                lido_em TEXT NOT NULL,
+                PRIMARY KEY (aviso_id, matricula)
+            )
+        ''')
+
         # 🌱 Seed único da área "segmento-grupo": já existia uma lista real
         # de materiais (Grupos 1+2+3, do documento oficial da CSN) usada
         # no folhão de Segmento Grupo — reaproveitamos aqui como ponto de
@@ -1849,6 +1874,21 @@ class LaudoCriar(BaseModel):
 
 
 class LaudoExcluir(BaseModel):
+    id: int
+
+
+class AvisoCriar(BaseModel):
+    titulo: str
+    mensagem: str
+    criado_por: Optional[str] = None
+
+
+class AvisoMarcarLido(BaseModel):
+    aviso_id: int
+    matricula: str
+
+
+class AvisoExcluir(BaseModel):
     id: int
 
 
