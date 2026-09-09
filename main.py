@@ -24,6 +24,7 @@ from routers import (
     ordens_servico,
     qualidade,
     laudos,
+    avisos,
 )
 
 tags_metadata = [
@@ -48,6 +49,7 @@ tags_metadata = [
     # ficou fácil de notar a lacuna, olhando os módulos lado a lado.
     {"name": "Checklist de Execução", "description": "Checklist de execução por tipo de equipamento — etapas, execuções em andamento e atividades extra."},
     {"name": "Qualidade", "description": "Registros de entrada/saída de Qualidade, com achados e fotos por etapa."},
+    {"name": "Avisos", "description": "Comunicados do ADM que o colaborador precisa ler e confirmar ao entrar no sistema."},
 ]
 
 app = FastAPI(
@@ -76,6 +78,6 @@ app.add_middleware(
 for modulo in (
     pecas, producao, sistema, auditoria, colaboradores, materiais, rolos,
     hidraulica, folhoes, notificacoes_push, registros_ocorrencia, oficina,
-    checklist_execucao, ordens_servico, qualidade, laudos,
+    checklist_execucao, ordens_servico, qualidade, laudos, avisos,
 ):
     app.include_router(modulo.router)
