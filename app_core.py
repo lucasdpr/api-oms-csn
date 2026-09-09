@@ -1104,6 +1104,26 @@ def init_db():
             )
         ''')
 
+        # 💬 CHAT ÁREA <-> ADM — conversa persistente entre uma área da
+        # Oficina e o ADM (pedido: "as áreas podem enviar mensagem pra área
+        # de ADM?" — hoje não podiam, só o ADM via tudo passivamente pelos
+        # eventos automáticos). `de_adm` diz de qual lado a mensagem partiu;
+        # `lida` é sempre relativa a quem RECEBEU (o outro lado): uma
+        # mensagem de_adm=FALSE fica não-lida pro ADM até ele abrir a
+        # conversa daquela área, e vice-versa.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS mensagens_area_adm (
+                id SERIAL PRIMARY KEY,
+                area TEXT NOT NULL,
+                de_adm BOOLEAN NOT NULL DEFAULT FALSE,
+                remetente TEXT,
+                remetente_matricula TEXT,
+                mensagem TEXT NOT NULL,
+                criado_em TEXT NOT NULL,
+                lida BOOLEAN DEFAULT FALSE
+            )
+        ''')
+
         # 🌱 Seed único da área "segmento-grupo": já existia uma lista real
         # de materiais (Grupos 1+2+3, do documento oficial da CSN) usada
         # no folhão de Segmento Grupo — reaproveitamos aqui como ponto de
@@ -1890,6 +1910,19 @@ class AvisoMarcarLido(BaseModel):
 
 class AvisoExcluir(BaseModel):
     id: int
+
+
+class MensagemAreaAdmEnviar(BaseModel):
+    area: str
+    de_adm: bool = False
+    remetente: Optional[str] = None
+    remetente_matricula: Optional[str] = None
+    mensagem: str
+
+
+class MensagemAreaAdmMarcarLida(BaseModel):
+    area: str
+    de_adm: bool  # quem está chamando: True = ADM lendo, False = a própria área lendo
 
 
 

@@ -25,6 +25,7 @@ from routers import (
     qualidade,
     laudos,
     avisos,
+    mensagens_area_adm,
 )
 
 tags_metadata = [
@@ -50,6 +51,7 @@ tags_metadata = [
     {"name": "Checklist de Execução", "description": "Checklist de execução por tipo de equipamento — etapas, execuções em andamento e atividades extra."},
     {"name": "Qualidade", "description": "Registros de entrada/saída de Qualidade, com achados e fotos por etapa."},
     {"name": "Avisos", "description": "Comunicados do ADM que o colaborador precisa ler e confirmar ao entrar no sistema."},
+    {"name": "Mensagens Área-ADM", "description": "Conversa persistente entre cada área da Oficina e o ADM."},
 ]
 
 app = FastAPI(
@@ -79,5 +81,6 @@ for modulo in (
     pecas, producao, sistema, auditoria, colaboradores, materiais, rolos,
     hidraulica, folhoes, notificacoes_push, registros_ocorrencia, oficina,
     checklist_execucao, ordens_servico, qualidade, laudos, avisos,
+    mensagens_area_adm,
 ):
     app.include_router(modulo.router)
