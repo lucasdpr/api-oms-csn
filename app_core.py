@@ -1923,6 +1923,7 @@ class MensagemAreaAdmEnviar(BaseModel):
 class MensagemAreaAdmMarcarLida(BaseModel):
     area: str
     de_adm: bool  # quem está chamando: True = ADM lendo, False = a própria área lendo
+    matricula: Optional[str] = None  # se vier, também marca lido na Central (notificacoes_lidas)
 
 
 

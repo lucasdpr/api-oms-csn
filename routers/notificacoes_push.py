@@ -130,7 +130,27 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
         """, (matricula, limite))
         estoque = cursor.fetchall()
 
-    todos = list(eventos) + list(ordens) + list(achados) + list(estoque) + list(sinotico) + list(atividades_evt)
+        # 🆕 Chat Área <-> ADM (mensagens_area_adm) — antes só virava push
+        # (ver enviar_mensagem_area em mensagens_area_adm.py), e quem
+        # perdesse a notificação do celular nunca mais via que tinha
+        # mensagem. Agora toda mensagem entra na Central também, igual
+        # qualquer outro evento — clicar abre a conversa da área (ver
+        # tipo 'mensagem_area' no front-end).
+        cursor.execute("""
+            SELECT 'mensagem_area' AS tipo, m.id::text AS evento_id, m.area, m.area AS referencia,
+                   CASE WHEN m.de_adm THEN 'ADM: ' || m.mensagem
+                        ELSE COALESCE(m.remetente, 'Técnico') || ': ' || m.mensagem END AS descricao,
+                   COALESCE(m.remetente, 'ADM') AS autor, m.criado_em,
+                   (l.matricula IS NOT NULL) AS lida
+            FROM mensagens_area_adm m
+            LEFT JOIN notificacoes_lidas l
+                ON l.tipo = 'mensagem_area' AND l.evento_id = m.id::text AND l.matricula = %s
+            ORDER BY m.id DESC
+            LIMIT %s
+        """, (matricula, limite))
+        mensagens_area = cursor.fetchall()
+
+    todos = list(eventos) + list(ordens) + list(achados) + list(estoque) + list(sinotico) + list(atividades_evt) + list(mensagens_area)
     todos.sort(key=lambda x: x["data_hora"] or "", reverse=True)
     return todos[:limite]
 
