@@ -1,0 +1,36 @@
+name: Lint / sintaxe
+
+# CI leve de propósito: este projeto não tem suíte de testes nem banco
+# de teste disponível em CI, então não dá pra rodar a API de verdade
+# aqui. O que ESTE workflow garante, em toda PR e push na main: nenhum
+# arquivo .py tem erro de sintaxe, e nenhum nome usado num arquivo
+# ficou sem import (o mesmo tipo de bug achado manualmente na divisão
+# de main.py em routers/ — ver PR #41) passa despercebido até alguém
+# notar em produção.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Instalar flake8
+        run: pip install flake8
+      - name: Checar sintaxe de todo arquivo .py
+        run: python -m compileall -q .
+      - name: Checar nomes indefinidos / imports faltando
+        # Só F821 (nome indefinido), F811 (redefinição) e E999 (erro de
+        # sintaxe) — exatamente o tipo de bug que apareceu na divisão de
+        # main.py em routers/ (PR #41). "Import não usado" (F401) fica de
+        # fora de propósito: em app_core.py alguns imports existem só
+        # pra outros arquivos importarem DELE (ex: bcrypt, reexportado
+        # pra routers/colaboradores.py), e em main.py o import de
+        # app_core é só pelo efeito colateral do init_db() — os dois
+        # casos são intencionais, não bug.
+        run: flake8 --select=F821,F811,E999 $(git ls-files '*.py')

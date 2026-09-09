@@ -6,10 +6,7 @@ from typing import Optional
 
 import bcrypt
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import psycopg2
 from psycopg2 import pool as psycopg2_pool
 from psycopg2.extras import RealDictCursor
 from pywebpush import webpush, WebPushException
