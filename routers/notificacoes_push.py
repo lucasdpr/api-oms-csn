@@ -140,7 +140,7 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
             SELECT 'mensagem_area' AS tipo, m.id::text AS evento_id, m.area, m.area AS referencia,
                    CASE WHEN m.de_adm THEN 'ADM: ' || m.mensagem
                         ELSE COALESCE(m.remetente, 'Técnico') || ': ' || m.mensagem END AS descricao,
-                   COALESCE(m.remetente, 'ADM') AS autor, m.criado_em,
+                   COALESCE(m.remetente, 'ADM') AS autor, m.criado_em AS data_hora,
                    (l.matricula IS NOT NULL) AS lida
             FROM mensagens_area_adm m
             LEFT JOIN notificacoes_lidas l
