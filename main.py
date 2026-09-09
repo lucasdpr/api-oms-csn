@@ -2946,13 +2946,25 @@ def get_fotos_da_peca(peca_id: str):
 def get_registros_ocorrencia(categoria: Optional[str] = None, limite: int = 100):
     with get_db() as conn:
         cursor = conn.cursor()
+        # 🔧 CORREÇÃO ("Registro de Ocorrência mostra atividade de área e
+        # conversa junto"): esta rota nunca excluía categoria='Atividade
+        # Oficina' — apesar de um comentário em /api/notificacoes/feed
+        # (a Central de Notificações) já afirmar "mesmo filtro que
+        # /api/registros_ocorrencia sempre usou". Não usava: qualquer
+        # evento de Atividade da Oficina (criar/mudar status/mensagem —
+        # ver registrar_evento_atividade_oficina) grava em log_eventos
+        # com essa categoria própria, e como `categoria IS NOT NULL`
+        # também é verdade pra ela, esses eventos entravam aqui junto
+        # com as ocorrências de verdade (Intervenção/Melhoria/Comentário/
+        # Atividade Pendente, criadas em /api/registro_com_foto).
+        # Replicado o mesmo filtro que a Central de Notificações usa.
         if categoria:
             cursor.execute("""
                 SELECT e.id, e.data_hora, e.operador, e.peca_id, e.acao, e.categoria, e.area,
                        f.foto_base64
                 FROM log_eventos e
                 LEFT JOIN fotos_registro f ON f.evento_id = e.id
-                WHERE e.categoria = %s
+                WHERE e.categoria = %s AND e.categoria != 'Atividade Oficina'
                 ORDER BY e.id DESC
                 LIMIT %s
             """, (categoria, limite))
@@ -2962,7 +2974,7 @@ def get_registros_ocorrencia(categoria: Optional[str] = None, limite: int = 100)
                        f.foto_base64
                 FROM log_eventos e
                 LEFT JOIN fotos_registro f ON f.evento_id = e.id
-                WHERE e.categoria IS NOT NULL
+                WHERE e.categoria IS NOT NULL AND e.categoria != 'Atividade Oficina'
                 ORDER BY e.id DESC
                 LIMIT %s
             """, (limite,))
