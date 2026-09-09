@@ -4,6 +4,7 @@ from app_core import (
     AvisoExcluir,
     AvisoMarcarLido,
     agora_brasil,
+    enviar_push_para_todos,
     get_db,
 )
 
@@ -72,6 +73,14 @@ def criar_aviso(dados: AvisoCriar):
         )
         novo_id = cursor.fetchone()["id"]
         conn.commit()
+
+    # 📣 Notifica todo mundo inscrito em push, não só quem já vê o aviso ao
+    # abrir o app — ver enviar_push_para_todos() em app_core.py.
+    enviar_push_para_todos(
+        titulo=f"📢 {dados.titulo}",
+        corpo=dados.mensagem,
+    )
+
     return {"sucesso": True, "id": novo_id}
 
 

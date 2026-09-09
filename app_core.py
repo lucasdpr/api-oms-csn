@@ -1254,6 +1254,25 @@ def _disparar_push_para_inscricoes(inscricoes, titulo: str, corpo: str, url: str
             conn.commit()
 
 
+# 🆕 Avisa TODO MUNDO com inscrição push, não só ADM (enviar_push_para_area
+# com area="Ambos" manda só pros 3 ADMs — ver comentário logo abaixo, é
+# assim de propósito pra eventos de auditoria sem área associada). Usado
+# pelos Avisos do Sistema (routers/avisos.py): um comunicado do ADM
+# ("treinamento disponível") precisa alcançar TODO colaborador inscrito,
+# não só quem já vê tudo mesmo sem push.
+def enviar_push_para_todos(titulo: str, corpo: str, url: str = "/app.html#avisos", dados_extra: Optional[dict] = None):
+    if not PUSH_HABILITADO:
+        return
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT endpoint, p256dh, auth FROM push_subscriptions")
+            inscricoes = cursor.fetchall()
+            _disparar_push_para_inscricoes(inscricoes, titulo, corpo, url, dados_extra)
+    except Exception as e:
+        print(f"⚠️ Falha ao enviar push de Aviso do Sistema pra todo mundo: {e}")
+
+
 def enviar_push_para_area(titulo: str, corpo: str, area: str = "Ambos", url: str = "/app.html#notificacoes", dados_extra: Optional[dict] = None):
     if not PUSH_HABILITADO:
         return
