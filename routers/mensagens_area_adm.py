@@ -109,13 +109,31 @@ def enviar_mensagem_area(dados: MensagemAreaAdmEnviar):
 
 @router.post("/api/mensagens_area/marcar_lida", tags=["Mensagens Área-ADM"], summary="Marcar como lidas as mensagens de um lado da conversa")
 def marcar_mensagens_area_lidas(dados: MensagemAreaAdmMarcarLida):
+    agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         # Quem chama é quem LEU — então marca como lida a mensagem que
         # partiu do OUTRO lado (de_adm invertido em relação a quem pediu).
         cursor.execute(
-            "UPDATE mensagens_area_adm SET lida = TRUE WHERE area = %s AND de_adm = %s AND lida = FALSE",
+            "UPDATE mensagens_area_adm SET lida = TRUE WHERE area = %s AND de_adm = %s AND lida = FALSE RETURNING id",
             (dados.area, not dados.de_adm)
         )
+        ids_marcados = [linha["id"] for linha in cursor.fetchall()]
+        # 🐛 CORREÇÃO ("respondi no ADM e não sumiu da Central"): ler a
+        # conversa aqui só marcava lida em mensagens_area_adm — a Central
+        # de Notificações usa uma tabela separada (notificacoes_lidas,
+        # por matrícula). Sem isso, a mensagem lida no chat continuava
+        # aparecendo como não-lida na Central pra sempre.
+        if dados.matricula and ids_marcados:
+            matricula = dados.matricula.strip().upper()
+            for msg_id in ids_marcados:
+                cursor.execute(
+                    """
+                    INSERT INTO notificacoes_lidas (tipo, evento_id, matricula, lido_em)
+                    VALUES ('mensagem_area', %s, %s, %s)
+                    ON CONFLICT (tipo, evento_id, matricula) DO NOTHING
+                    """,
+                    (str(msg_id), matricula, agora)
+                )
         conn.commit()
     return {"sucesso": True}
