@@ -83,6 +83,17 @@ def gerar_id_sistema(veio_letra, tipo, rank_no_veio_tipo):
         return f"GRP2-{rank_no_veio_tipo}-{sufixo}"
     if t == "GRUPO 3":
         return f"GRP3-{rank_no_veio_tipo}-{sufixo}"
+    # 🆕 Oscilador/Mesa Osciladora — PROVISÓRIO: equipamento ainda não
+    # existe fisicamente em nenhum veio (sem tag real confirmada com a
+    # área ainda). Oscilador é pool de 6 unidades (OS1..OS6, 4 ativas +
+    # 2 reserva) que ocupam 2 vagas fixas por veio (Norte/Sul, igual o
+    # Bow); Mesa Osciladora é 1 vaga fixa por veio, igual o Bender.
+    # Ajustar aqui quando a tag real da área for confirmada.
+    if t == "OSCILADOR":
+        lado = "N" if rank_no_veio_tipo == 1 else "S"
+        return f"OSC-{lado}-{sufixo}"
+    if t == "MESA OSCILADORA":
+        return f"MES-{sufixo}"
     # fallback de segurança para qualquer tipo não previsto acima
     return f"{t.replace(' ', '')}-{rank_no_veio_tipo}-{sufixo}"
 
