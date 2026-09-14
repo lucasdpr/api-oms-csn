@@ -130,6 +130,24 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
         """, (matricula, limite))
         estoque = cursor.fetchall()
 
+        # 🆕 Padrão detectado entre achados de Qualidade (mesma categoria
+        # em vários equipamentos diferentes — ver avisar_se_padrao_
+        # achados/verificar_padrao_achados em app_core.py). Antes só
+        # virava push efêmero; agora fica na Central também, com área
+        # sintética própria ("qualidade-padrao"), igual sinotico/estoque.
+        cursor.execute("""
+            SELECT 'padrao_qualidade' AS tipo, e.id::text AS evento_id, e.area, 'Qualidade' AS referencia,
+                   e.acao AS descricao, e.operador AS autor, e.data_hora,
+                   (l.matricula IS NOT NULL) AS lida
+            FROM log_eventos e
+            LEFT JOIN notificacoes_lidas l
+                ON l.tipo = 'padrao_qualidade' AND l.evento_id = e.id::text AND l.matricula = %s
+            WHERE e.area = 'qualidade-padrao'
+            ORDER BY e.id DESC
+            LIMIT %s
+        """, (matricula, limite))
+        padroes_qualidade = cursor.fetchall()
+
         # 🆕 Chat Área <-> ADM (mensagens_area_adm) — antes só virava push
         # (ver enviar_mensagem_area em mensagens_area_adm.py), e quem
         # perdesse a notificação do celular nunca mais via que tinha
@@ -150,7 +168,7 @@ def get_notificacoes_feed(matricula: str, limite: int = 30):
         """, (matricula, limite))
         mensagens_area = cursor.fetchall()
 
-    todos = list(eventos) + list(ordens) + list(achados) + list(estoque) + list(sinotico) + list(atividades_evt) + list(mensagens_area)
+    todos = list(eventos) + list(ordens) + list(achados) + list(estoque) + list(sinotico) + list(atividades_evt) + list(mensagens_area) + list(padroes_qualidade)
     todos.sort(key=lambda x: x["data_hora"] or "", reverse=True)
     return todos[:limite]
 

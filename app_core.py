@@ -851,9 +851,21 @@ def init_db():
                 criado_em TEXT,
                 foto_resolucao_base64 TEXT,
                 resolvido_por TEXT,
-                resolvido_em TEXT
+                resolvido_em TEXT,
+                categoria TEXT
             )
         ''')
+        # 🆕 DETECÇÃO DE PADRÃO EM ACHADOS: até aqui "descricao" era texto
+        # livre — não dava pra saber se "vazamento no distribuidor" e
+        # "óleo vazando no cilindro" são o MESMO tipo de problema sem ler
+        # um por um. categoria é opcional (achado antigo fica com
+        # categoria=NULL, continua funcionando normal) — quando
+        # preenchida, permite ver_padroes_qualidade() abaixo agrupar por
+        # tipo de defeito e avisar se o mesmo tipo está aparecendo em
+        # vários equipamentos diferentes num curto espaço de tempo (sinal
+        # de problema sistêmico: lote de material ruim, procedimento
+        # errado — não um problema pontual de UM equipamento).
+        cursor.execute('''ALTER TABLE qualidade_achados ADD COLUMN IF NOT EXISTS categoria TEXT''')
 
         # 🆕 Um achado pode ter mais de 1 foto (antes só tinha a coluna
         # foto_base64 na própria tabela, limitando a 1). A coluna antiga
@@ -1374,6 +1386,108 @@ def enviar_push_para_matricula(matricula: str, titulo: str, corpo: str, url: str
         print(f"⚠️ Falha geral ao processar envio de push (matrícula): {e}")
 
 
+# ==========================================================================
+# 🆕 DETECÇÃO DE PADRÃO EM ACHADOS DE QUALIDADE
+# ==========================================================================
+# Um achado sozinho ("trinca no rolo #3") é problema de UM equipamento.
+# O MESMO tipo de achado (mesma categoria) aparecendo em VÁRIOS
+# equipamentos diferentes num curto espaço de tempo é outra coisa —
+# sinal de problema sistêmico (lote de material ruim, procedimento
+# errado, ferramenta descalibrada), não um defeito pontual. Até aqui
+# ninguém cruzava achados entre si — cada um só existia isolado dentro
+# do próprio registro de Qualidade.
+# 🔧 Configurável via variável de ambiente (sem precisar mexer em código
+# e reimplantar) — o valor "certo" só se descobre na prática, depois de
+# rodar um tempo em produção e ver se gera alerta demais (ruído) ou de
+# menos (não pega nada). Default mantém o comportamento original.
+DIAS_JANELA_PADRAO_ACHADOS = int(os.environ.get("DIAS_JANELA_PADRAO_ACHADOS", "7"))
+MINIMO_EQUIPAMENTOS_PADRAO_ACHADOS = int(os.environ.get("MINIMO_EQUIPAMENTOS_PADRAO_ACHADOS", "3"))
+
+
+def verificar_padrao_achados(cursor, categoria: str):
+    """Depois de inserir um achado com categoria preenchida, confere se
+    essa categoria já apareceu em EQUIPAMENTOS DIFERENTES o suficiente
+    pra virar um alerta de padrão. 'Outros' fica de fora de propósito —
+    é o catch-all genérico do dropdown, não descreve um tipo de defeito
+    real, então nunca formaria um padrão significativo.
+    Devolve a lista de peça_id envolvidas se cruzou o limite (achado
+    NOVO, dispara alerta agora), ou None se ainda não cruzou / já tinha
+    cruzado antes (pra não avisar de novo a cada achado subsequente da
+    mesma categoria)."""
+    if not categoria or not categoria.strip() or categoria.strip().lower() == "outros":
+        return None
+    categoria = categoria.strip()
+
+    cursor.execute(
+        """
+        SELECT DISTINCT r.peca_id
+        FROM qualidade_achados a
+        JOIN qualidade_registros r ON r.id = a.registro_id
+        WHERE a.categoria = %s
+          AND a.criado_em >= (NOW() AT TIME ZONE 'America/Sao_Paulo' - INTERVAL '%s days')::TEXT
+        """,
+        (categoria, DIAS_JANELA_PADRAO_ACHADOS)
+    )
+    equipamentos = [row["peca_id"] for row in cursor.fetchall()]
+
+    if len(equipamentos) < MINIMO_EQUIPAMENTOS_PADRAO_ACHADOS:
+        return None
+    # Se já tinha cruzado o limite ANTES deste achado (equipamento atual
+    # já contava mesmo sem ele), não é novidade — já foi avisado. Só
+    # alerta de novo se for a exclusão do achado atual que derruba a
+    # contagem abaixo do limite (ou seja: o achado atual é o motivo do
+    # padrão existir agora).
+    if len(equipamentos) - 1 >= MINIMO_EQUIPAMENTOS_PADRAO_ACHADOS:
+        return None
+    return equipamentos
+
+
+def avisar_se_padrao_achados(categoria: Optional[str], equipamentos: list):
+    """Dispara o alerta de padrão — chamada FORA da transação principal
+    (depois do commit), mesmo padrão de robustez usado nos outros
+    eventos: uma falha aqui nunca pode derrubar o registro do achado em
+    si, que já foi salvo.
+
+    Dois canais, não só um:
+    1. Push (enviar_push_para_area) — imediato, mas EFÊMERO: só chega em
+       quem estiver com o app aberto/inscrito naquele segundo. Quem não
+       via na hora, nunca mais sabia que o padrão existiu.
+    2. log_eventos (área='qualidade-padrao') — PERSISTENTE, entra no
+       feed de /api/notificacoes/feed junto com tudo mais (Ocorrência,
+       OS, achado, estoque...) e conta no badge de não-lidas. Mesmo
+       padrão já usado pra Sinótico 3D e Estoque (ver comentário em
+       registrar_evento_atividade_oficina) — sem isso o painel de
+       Qualidade só avisava quem abrisse a aba por conta própria."""
+    if not equipamentos:
+        return
+    try:
+        enviar_push_para_area(
+            titulo="🚨 Padrão detectado em Qualidade",
+            corpo=f"'{categoria}' apareceu em {len(equipamentos)} equipamentos diferentes nos últimos {DIAS_JANELA_PADRAO_ACHADOS} dias: {', '.join(equipamentos)}.",
+            area="Ambos"
+        )
+    except Exception as e:
+        print(f"⚠️ Falha ao avisar padrão de achados (push): {e}")
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, categoria, area) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (
+                    agora_brasil().strftime("%Y-%m-%d %H:%M:%S"),
+                    "Sistema",
+                    None,
+                    f"'{categoria}' apareceu em {len(equipamentos)} equipamentos diferentes nos últimos {DIAS_JANELA_PADRAO_ACHADOS} dias: {', '.join(equipamentos)}.",
+                    None,
+                    "qualidade-padrao",
+                )
+            )
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️ Falha ao avisar padrão de achados (central de notificações): {e}")
+
+
 # 🆕 Registro PERSISTENTE de toda ação numa atividade da Oficina (criar,
 # mudar status, editar, excluir, mandar mensagem) — pediu explicitamente
 # que TODA ação gere notificação na Central. Antes só existia o push
@@ -1862,6 +1976,7 @@ class OrdemServicoExcluir(BaseModel):
 class QualidadeAchadoInput(BaseModel):
     descricao: str
     fotos_base64: list[str] = []  # 🆕 um achado pode ter mais de 1 foto
+    categoria: Optional[str] = None  # 🆕 ver DETECÇÃO DE PADRÃO EM ACHADOS abaixo
 
 
 class QualidadeCriar(BaseModel):
@@ -1887,12 +2002,14 @@ class QualidadeAchadoCriar(BaseModel):
     descricao: str
     fotos_base64: list[str] = []  # 🆕 um achado pode ter mais de 1 foto
     operador: str
+    categoria: Optional[str] = None  # 🆕 ver DETECÇÃO DE PADRÃO EM ACHADOS abaixo
 
 
 class QualidadeAchadoEditar(BaseModel):
     id: int
     descricao: str
     operador: str
+    categoria: Optional[str] = None
 
 
 class QualidadeAchadoResolver(BaseModel):
