@@ -70,7 +70,37 @@ def listar_atividades_oficina(area: Optional[str] = None, status: Optional[str] 
         query += " ORDER BY oa.id DESC LIMIT %s"
         params.append(limite)
         cursor.execute(query, params)
-        return cursor.fetchall()
+        linhas = cursor.fetchall()
+
+    # 🔧 CONSUMO DE EGRESS ("Neon ia travar por causa disso"): essa é a
+    # listagem mais pesada do sistema — sem filtro, traz TODA atividade
+    # de TODA área de uma vez (até 1000), de propósito (ver docstring).
+    # `SELECT oa.*` trazia a foto em base64 de CADA atividade também,
+    # mesmo as que ninguém nunca abre — isso sozinho podia ser vários MB
+    # por carregamento, toda vez que a grade da Oficina é aberta. A foto
+    # só é usada quando alguém abre a atividade específica pra editar
+    # (ver editarAtividadeOficina no front) — não precisa vir em toda
+    # atividade da lista inteira. Troca por um booleano `tem_foto`; a
+    # foto de verdade só é buscada sob demanda em
+    # GET /api/oficina/atividades/{id}/foto.
+    for linha in linhas:
+        linha["tem_foto"] = linha.get("foto_base64") is not None
+        linha.pop("foto_base64", None)
+    return linhas
+
+
+@router.get("/api/oficina/atividades/{atividade_id}/foto", tags=["Oficina"], summary="Buscar a foto de uma atividade específica (sob demanda)")
+def get_foto_atividade_oficina(atividade_id: int):
+    """Companheira de listar_atividades_oficina — busca a foto (base64)
+    de UMA atividade só, quando alguém realmente precisa dela (abrir
+    pra editar), em vez de vir embutida pra todo mundo na listagem."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT foto_base64 FROM oficina_atividades WHERE id = %s", (atividade_id,))
+        linha = cursor.fetchone()
+    if not linha:
+        raise HTTPException(status_code=404, detail="Atividade não encontrada.")
+    return {"foto_base64": linha["foto_base64"]}
 
 
 
