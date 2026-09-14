@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from app_core import (
     ColaboradorAlternarAtivo,
     ColaboradorMudarCargo,
@@ -8,6 +8,8 @@ from app_core import (
     MATRICULAS_ADM,
     _buscar_area_colaborador,
     bcrypt,
+    exigir_admin,
+    gerar_token,
     get_db,
 )
 
@@ -68,7 +70,8 @@ def login_colaborador(dados: LoginColaborador):
             "cargo": colaborador["cargo"],
             "area": area,
             "is_adm": is_adm,
-            "precisa_definir_senha": False
+            "precisa_definir_senha": False,
+            "token": gerar_token(matricula),  # 🆕 usado pelo front nas rotas admin (Authorization: Bearer <token>)
         }
 
 
@@ -106,24 +109,17 @@ def definir_senha_colaborador(dados: DefinirSenhaColaborador):
         )
         conn.commit()
 
-    return {"sucesso": True}
+    return {"sucesso": True, "token": gerar_token(matricula)}
 
 
 # ==========================================
-# ADMINISTRAÇÃO DE COLABORADORES (Área Restrita — só as 2 matrículas
-# admin, checagem feita no front-end igual ao resto da Área Restrita;
-# essas rotas não têm autenticação própria, seguindo o mesmo padrão do
-# resto da API neste sistema).
-# ==========================================
-
-
-
-
-# ==========================================
-# ADMINISTRAÇÃO DE COLABORADORES (Área Restrita — só as 2 matrículas
-# admin, checagem feita no front-end igual ao resto da Área Restrita;
-# essas rotas não têm autenticação própria, seguindo o mesmo padrão do
-# resto da API neste sistema).
+# ADMINISTRAÇÃO DE COLABORADORES (Área Restrita — só as 3 matrículas
+# ADM). 🔧 As 3 rotas de escrita abaixo (mudar_cargo/alternar_ativo/
+# resetar_senha) agora exigem Depends(exigir_admin) — antes a checagem
+# era só visual no front-end (achado numa revisão de segurança: dava
+# pra chamar essas rotas direto, sem estar logado nem ser admin). A de
+# listagem (get_colaboradores_todos) continua aberta — é só leitura de
+# nome/cargo/matrícula, sem dado sensível (sem senha_hash).
 # ==========================================
 @router.get("/api/colaboradores/todos", tags=["Colaboradores"], summary="Listar todos os colaboradores (ativos e inativos)")
 def get_colaboradores_todos():
@@ -142,7 +138,7 @@ def get_colaboradores_todos():
 
 
 @router.post("/api/colaboradores/mudar_cargo", tags=["Colaboradores"], summary="Trocar o cargo de um colaborador")
-def mudar_cargo_colaborador(dados: ColaboradorMudarCargo):
+def mudar_cargo_colaborador(dados: ColaboradorMudarCargo, _admin: str = Depends(exigir_admin)):
     matricula = dados.matricula.strip().upper()
     cargo = dados.cargo.strip()
     if not cargo:
@@ -161,7 +157,7 @@ def mudar_cargo_colaborador(dados: ColaboradorMudarCargo):
 
 
 @router.post("/api/colaboradores/alternar_ativo", tags=["Colaboradores"], summary="Ativar ou desativar acesso de um colaborador")
-def alternar_ativo_colaborador(dados: ColaboradorAlternarAtivo):
+def alternar_ativo_colaborador(dados: ColaboradorAlternarAtivo, _admin: str = Depends(exigir_admin)):
     matricula = dados.matricula.strip().upper()
 
     with get_db() as conn:
@@ -177,7 +173,7 @@ def alternar_ativo_colaborador(dados: ColaboradorAlternarAtivo):
 
 
 @router.post("/api/colaboradores/resetar_senha", tags=["Colaboradores"], summary="Resetar senha de um colaborador")
-def resetar_senha_colaborador(dados: ColaboradorResetarSenha):
+def resetar_senha_colaborador(dados: ColaboradorResetarSenha, _admin: str = Depends(exigir_admin)):
     """Zera a senha do colaborador e marca como 'primeiro acesso' de
     novo — a senha temporária volta a ser a própria matrícula, igual
     faz o resetar_colaboradores.py no terminal, mas só pra UMA pessoa

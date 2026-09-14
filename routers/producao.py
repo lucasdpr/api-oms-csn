@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from app_core import (
     ApontamentoMoldes,
     DesfazerApontamento,
     ProducaoGeral,
     agora_brasil,
     enviar_push_para_area,
+    exigir_admin,
     get_db,
 )
 
@@ -106,7 +107,7 @@ def get_historico_moldes():
 
 
 @router.post("/api/desfazer_apontamento_geral", tags=["Produção"], summary="Desfazer apontamento (geral)")
-def desfazer_apontamento_geral(dados: DesfazerApontamento):
+def desfazer_apontamento_geral(dados: DesfazerApontamento, _admin: str = Depends(exigir_admin)):
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM log_apontamento_geral WHERE id = %s", (dados.log_id,))
@@ -140,7 +141,7 @@ def desfazer_apontamento_geral(dados: DesfazerApontamento):
 
 
 @router.post("/api/desfazer_apontamento_moldes", tags=["Produção"], summary="Desfazer apontamento de moldes")
-def desfazer_apontamento_moldes(dados: DesfazerApontamento):
+def desfazer_apontamento_moldes(dados: DesfazerApontamento, _admin: str = Depends(exigir_admin)):
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM log_apontamento_moldes WHERE id = %s", (dados.log_id,))
