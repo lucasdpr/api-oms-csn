@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from app_core import (
+    DIAS_JANELA_PADRAO_ACHADOS,
+    MINIMO_EQUIPAMENTOS_PADRAO_ACHADOS,
     Optional,
     QualidadeAchadoCriar,
     QualidadeAchadoEditar,
@@ -9,8 +11,10 @@ from app_core import (
     QualidadeExcluir,
     QualidadeSaida,
     agora_brasil,
+    avisar_se_padrao_achados,
     enviar_push_para_area,
     get_db,
+    verificar_padrao_achados,
 )
 
 router = APIRouter()
@@ -87,15 +91,18 @@ def criar_qualidade(dados: QualidadeCriar):
             [(registro_id, foto, agora) for foto in dados.fotos_entrada_base64]
         )
 
+        padroes_a_avisar = {}  # categoria -> lista de equipamentos, só se cruzou o limite AGORA
         if dados.achados:
+            categorias_ja_checadas = set()  # 1 checagem por categoria no lote, não 1 por achado
             for a in dados.achados:
                 if not a.descricao or not a.descricao.strip():
                     continue
+                categoria = (a.categoria or '').strip() or None
                 cursor.execute(
-                    """INSERT INTO qualidade_achados (registro_id, descricao, status, criado_por, criado_em)
-                       VALUES (%s, %s, 'Pendente', %s, %s)
+                    """INSERT INTO qualidade_achados (registro_id, descricao, status, criado_por, criado_em, categoria)
+                       VALUES (%s, %s, 'Pendente', %s, %s, %s)
                        RETURNING id""",
-                    (registro_id, a.descricao.strip(), dados.operador, agora)
+                    (registro_id, a.descricao.strip(), dados.operador, agora, categoria)
                 )
                 achado_id = cursor.fetchone()["id"]
                 if a.fotos_base64:
@@ -103,8 +110,19 @@ def criar_qualidade(dados: QualidadeCriar):
                         "INSERT INTO qualidade_achado_fotos (achado_id, foto_base64, criado_em) VALUES (%s, %s, %s)",
                         [(achado_id, foto, agora) for foto in a.fotos_base64]
                     )
+                if categoria and categoria not in categorias_ja_checadas:
+                    categorias_ja_checadas.add(categoria)
+                    equipamentos = verificar_padrao_achados(cursor, categoria)
+                    if equipamentos:
+                        padroes_a_avisar[categoria] = equipamentos
 
         conn.commit()
+
+    # 🆕 Detecção de padrão — ver DETECÇÃO DE PADRÃO EM ACHADOS QUALIDADE
+    # em app_core.py. Fora da transação (depois do commit), mesmo padrão
+    # de robustez dos outros eventos — nunca derruba o registro em si.
+    for categoria, equipamentos in padroes_a_avisar.items():
+        avisar_se_padrao_achados(categoria, equipamentos)
 
     return {"sucesso": True, "id": registro_id}
 
@@ -228,13 +246,14 @@ def criar_achado_qualidade(dados: QualidadeAchadoCriar):
         if not registro:
             raise HTTPException(status_code=404, detail="Registro de qualidade não encontrado.")
 
+        categoria = (dados.categoria or '').strip() or None
         cursor.execute(
             """
-            INSERT INTO qualidade_achados (registro_id, descricao, status, criado_por, criado_em)
-            VALUES (%s, %s, 'Pendente', %s, %s)
+            INSERT INTO qualidade_achados (registro_id, descricao, status, criado_por, criado_em, categoria)
+            VALUES (%s, %s, 'Pendente', %s, %s, %s)
             RETURNING id
             """,
-            (dados.registro_id, dados.descricao.strip(), dados.operador, agora)
+            (dados.registro_id, dados.descricao.strip(), dados.operador, agora, categoria)
         )
         achado_id = cursor.fetchone()["id"]
 
@@ -243,6 +262,8 @@ def criar_achado_qualidade(dados: QualidadeAchadoCriar):
                 "INSERT INTO qualidade_achado_fotos (achado_id, foto_base64, criado_em) VALUES (%s, %s, %s)",
                 [(achado_id, foto, agora) for foto in dados.fotos_base64]
             )
+
+        equipamentos_padrao = verificar_padrao_achados(cursor, categoria) if categoria else None
 
         conn.commit()
 
@@ -255,6 +276,10 @@ def criar_achado_qualidade(dados: QualidadeAchadoCriar):
         corpo=f"{dados.operador} — {registro['peca_id']}: {dados.descricao.strip()}",
         area="Ambos"
     )
+    # 🆕 Detecção de padrão — ver DETECÇÃO DE PADRÃO EM ACHADOS DE
+    # QUALIDADE em app_core.py.
+    if equipamentos_padrao:
+        avisar_se_padrao_achados(categoria, equipamentos_padrao)
 
     return {"sucesso": True, "id": achado_id}
 
@@ -266,15 +291,22 @@ def editar_achado_qualidade(dados: QualidadeAchadoEditar):
     if not dados.descricao or not dados.descricao.strip():
         raise HTTPException(status_code=400, detail="Descreva o achado.")
 
+    categoria = (dados.categoria or '').strip() or None
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE qualidade_achados SET descricao = %s WHERE id = %s",
-            (dados.descricao.strip(), dados.id)
+            "UPDATE qualidade_achados SET descricao = %s, categoria = %s WHERE id = %s",
+            (dados.descricao.strip(), categoria, dados.id)
         )
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Achado não encontrado.")
+        equipamentos_padrao = verificar_padrao_achados(cursor, categoria) if categoria else None
         conn.commit()
+
+    # 🆕 Editar a categoria também pode ser o que faz um padrão cruzar o
+    # limite (ex: corrigir um achado que estava sem categoria).
+    if equipamentos_padrao:
+        avisar_se_padrao_achados(categoria, equipamentos_padrao)
 
     return {"sucesso": True}
 
@@ -330,6 +362,42 @@ def excluir_achado_qualidade(dados: QualidadeAchadoExcluir):
         conn.commit()
 
     return {"sucesso": True}
+
+
+
+
+# ==========================================
+# 🆕 DETECÇÃO DE PADRÃO EM ACHADOS — painel pra Supervisão/Qualidade
+# verem, sem precisar esperar o push chegar. Mesma janela/limite que
+# verificar_padrao_achados() usa pra disparar o alerta (app_core.py) —
+# essa rota só REFAZ a mesma pergunta pra montar uma lista, não dispara
+# notificação nenhuma.
+# ==========================================
+@router.get("/api/qualidade/achados/padroes", tags=["Qualidade"], summary="Padrões de defeito ativos (mesma categoria em vários equipamentos)")
+def listar_padroes_achados():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                a.categoria,
+                ARRAY_AGG(DISTINCT r.peca_id) AS equipamentos,
+                COUNT(DISTINCT r.peca_id) AS total_equipamentos,
+                MIN(a.criado_em) AS primeira_ocorrencia,
+                MAX(a.criado_em) AS ultima_ocorrencia
+            FROM qualidade_achados a
+            JOIN qualidade_registros r ON r.id = a.registro_id
+            WHERE a.categoria IS NOT NULL
+              AND a.categoria <> ''
+              AND LOWER(a.categoria) <> 'outros'
+              AND a.criado_em >= (NOW() AT TIME ZONE 'America/Sao_Paulo' - INTERVAL '%s days')::TEXT
+            GROUP BY a.categoria
+            HAVING COUNT(DISTINCT r.peca_id) >= %s
+            ORDER BY total_equipamentos DESC, ultima_ocorrencia DESC
+            """,
+            (DIAS_JANELA_PADRAO_ACHADOS, MINIMO_EQUIPAMENTOS_PADRAO_ACHADOS)
+        )
+        return cursor.fetchall()
 
 
 # ==========================================
