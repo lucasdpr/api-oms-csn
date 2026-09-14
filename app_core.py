@@ -1396,8 +1396,12 @@ def enviar_push_para_matricula(matricula: str, titulo: str, corpo: str, url: str
 # errado, ferramenta descalibrada), não um defeito pontual. Até aqui
 # ninguém cruzava achados entre si — cada um só existia isolado dentro
 # do próprio registro de Qualidade.
-DIAS_JANELA_PADRAO_ACHADOS = 7
-MINIMO_EQUIPAMENTOS_PADRAO_ACHADOS = 3
+# 🔧 Configurável via variável de ambiente (sem precisar mexer em código
+# e reimplantar) — o valor "certo" só se descobre na prática, depois de
+# rodar um tempo em produção e ver se gera alerta demais (ruído) ou de
+# menos (não pega nada). Default mantém o comportamento original.
+DIAS_JANELA_PADRAO_ACHADOS = int(os.environ.get("DIAS_JANELA_PADRAO_ACHADOS", "7"))
+MINIMO_EQUIPAMENTOS_PADRAO_ACHADOS = int(os.environ.get("MINIMO_EQUIPAMENTOS_PADRAO_ACHADOS", "3"))
 
 
 def verificar_padrao_achados(cursor, categoria: str):
@@ -1439,10 +1443,21 @@ def verificar_padrao_achados(cursor, categoria: str):
 
 
 def avisar_se_padrao_achados(categoria: Optional[str], equipamentos: list):
-    """Dispara o push de alerta — chamada FORA da transação principal
+    """Dispara o alerta de padrão — chamada FORA da transação principal
     (depois do commit), mesmo padrão de robustez usado nos outros
     eventos: uma falha aqui nunca pode derrubar o registro do achado em
-    si, que já foi salvo."""
+    si, que já foi salvo.
+
+    Dois canais, não só um:
+    1. Push (enviar_push_para_area) — imediato, mas EFÊMERO: só chega em
+       quem estiver com o app aberto/inscrito naquele segundo. Quem não
+       via na hora, nunca mais sabia que o padrão existiu.
+    2. log_eventos (área='qualidade-padrao') — PERSISTENTE, entra no
+       feed de /api/notificacoes/feed junto com tudo mais (Ocorrência,
+       OS, achado, estoque...) e conta no badge de não-lidas. Mesmo
+       padrão já usado pra Sinótico 3D e Estoque (ver comentário em
+       registrar_evento_atividade_oficina) — sem isso o painel de
+       Qualidade só avisava quem abrisse a aba por conta própria."""
     if not equipamentos:
         return
     try:
@@ -1452,7 +1467,25 @@ def avisar_se_padrao_achados(categoria: Optional[str], equipamentos: list):
             area="Ambos"
         )
     except Exception as e:
-        print(f"⚠️ Falha ao avisar padrão de achados: {e}")
+        print(f"⚠️ Falha ao avisar padrão de achados (push): {e}")
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, categoria, area) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (
+                    agora_brasil().strftime("%Y-%m-%d %H:%M:%S"),
+                    "Sistema",
+                    None,
+                    f"'{categoria}' apareceu em {len(equipamentos)} equipamentos diferentes nos últimos {DIAS_JANELA_PADRAO_ACHADOS} dias: {', '.join(equipamentos)}.",
+                    None,
+                    "qualidade-padrao",
+                )
+            )
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️ Falha ao avisar padrão de achados (central de notificações): {e}")
 
 
 # 🆕 Registro PERSISTENTE de toda ação numa atividade da Oficina (criar,
