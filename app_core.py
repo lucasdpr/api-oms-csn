@@ -2005,8 +2005,12 @@ def gerar_token(matricula: str) -> str:
     return base64.urlsafe_b64encode(bruto.encode()).decode()
 
 
-def _validar_token(token: str) -> Optional[str]:
-    """Devolve a matrícula se o token for válido e não tiver expirado; None caso contrário."""
+def validar_token(token: str) -> Optional[str]:
+    """Devolve a matrícula se o token for válido e não tiver expirado; None caso contrário.
+    Usada pela dependency exigir_login() (rota por rota) E pelo
+    middleware global ExigirLoginEmEscritasMiddleware (main.py) — uma
+    fonte só pra validar token, os dois lugares só decidem QUANDO
+    exigir ele."""
     try:
         bruto = base64.urlsafe_b64decode(token.encode()).decode()
         matricula, expira_em_str, assinatura = bruto.rsplit(".", 2)
@@ -2026,7 +2030,7 @@ def exigir_login(authorization: Optional[str] = Header(None)) -> str:
     válido. Devolve a matrícula de quem está autenticado."""
     if not authorization or not authorization.startswith("Bearer "):
         raise _HTTPException(status_code=401, detail="Não autenticado — faça login novamente.")
-    matricula = _validar_token(authorization[len("Bearer "):].strip())
+    matricula = validar_token(authorization[len("Bearer "):].strip())
     if not matricula:
         raise _HTTPException(status_code=401, detail="Sessão inválida ou expirada — faça login novamente.")
     return matricula

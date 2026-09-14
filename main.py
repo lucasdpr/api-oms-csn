@@ -1,11 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 # Importar app_core aqui já dispara, como efeito colateral (igual sempre
 # foi), a checagem/criação das tabelas e o seed inicial — init_db() é
 # chamado no fim do próprio app_core.py, na mesma ordem relativa que
 # tinha no main.py original antes desta divisão em módulos.
 import app_core  # noqa: F401  (import só pelo efeito colateral do init_db)
+from app_core import validar_token
 
 from routers import (
     pecas,
@@ -69,6 +72,40 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 🆕 "~100 rotas sem autenticação nenhuma" — achado numa revisão de
+# segurança (a mesma que corrigiu resetar_senha/mudar_cargo/
+# alternar_ativo/desfazer_apontamento_* com Depends(exigir_admin)).
+# Em vez de decorar cada uma das ~60 rotas de ESCRITA restantes com
+# Depends(exigir_login) — alto risco de esquecer uma, e cada rota
+# esquecida continua 100% aberta — um middleware único: TODA
+# requisição de escrita (POST/PUT/PATCH/DELETE) pra QUALQUER rota
+# precisa de um token de sessão válido no header Authorization. Fica
+# de fora só o que roda ANTES de existir um token (login em si — não
+# dá pra pedir token pra logar). Rotas que já exigem admin
+# (Depends(exigir_admin)) continuam com a checagem extra delas por
+# cima — redundante mas inofensivo, e mantém aquele nível mais estrito.
+#
+# Leituras (GET) continuam abertas — fora do escopo desta correção
+# (não travam nenhuma tela existente, e o app inteiro depende de vários
+# GETs acontecerem antes do login terminar de carregar a interface).
+ROTAS_SEM_LOGIN_OBRIGATORIO = {
+    "/api/colaboradores/login",
+    "/api/colaboradores/definir_senha",
+}
+
+
+class ExigirLoginEmEscritasMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if request.method in ("POST", "PUT", "PATCH", "DELETE") and request.url.path not in ROTAS_SEM_LOGIN_OBRIGATORIO:
+            autorizacao = request.headers.get("authorization", "")
+            token = autorizacao[len("Bearer "):].strip() if autorizacao.startswith("Bearer ") else None
+            if not token or not validar_token(token):
+                return JSONResponse({"detail": "Não autenticado — faça login novamente."}, status_code=401)
+        return await call_next(request)
+
+
+app.add_middleware(ExigirLoginEmEscritasMiddleware)
 
 # 🗂️ main.py agora só monta o app e liga cada grupo de rotas (mesma
 # divisão por assunto que já aparecia no /docs, via `tags=[...]`) — a
