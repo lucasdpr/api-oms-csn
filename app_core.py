@@ -1953,6 +1953,94 @@ class MensagemAreaAdmMarcarLida(BaseModel):
 # MATRICULAS_TESTE_FOLHOES, em script.js.
 MATRICULAS_ADM = ("CBK3574", "CSP1869", "CSP6632")
 
+# ==========================================================================
+# 🆕 AUTENTICAÇÃO DAS ROTAS "ADMIN" (Colaboradores + Produção/desfazer)
+# ==========================================================================
+# Achado numa revisão de segurança: as rotas de administração de
+# colaboradores (mudar_cargo/alternar_ativo/resetar_senha) e as de
+# desfazer apontamento de produção não tinham NENHUMA checagem no
+# servidor — só um "prompt de senha master" (hardcoded no JS, visível
+# pra qualquer um que abrisse o código-fonte) do lado do front. Qualquer
+# requisição direta pra API, sem passar pelo app nenhuma vez, conseguia
+# resetar a senha de qualquer colaborador só sabendo a matrícula dele.
+#
+# Isso implementa um token de sessão de verdade: o login (e a definição
+# de senha no primeiro acesso) devolvem um token assinado (HMAC-SHA256,
+# sem depender de biblioteca externa de JWT — este projeto não tinha
+# nenhuma nas dependências). exigir_login() valida esse token vindo no
+# header Authorization; exigir_admin() além disso confere que a
+# matrícula está em MATRICULAS_ADM.
+#
+# 🔧 Escopo desta correção: só as rotas de admin de colaboradores e as
+# de desfazer produção — as que a revisão realmente demonstrou serem
+# exploráveis. As outras ~100 rotas da API (peças, materiais, folhões
+# etc.) AINDA não passam por nenhuma checagem — ver o aviso que a
+# revisão deixou pro time sobre isso.
+import hashlib
+import hmac
+import base64
+import time as time_lib
+from fastapi import Header, HTTPException as _HTTPException
+
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    # Não derruba o servidor em produção por causa disso (a API tem
+    # outras rotas que continuam funcionando sem SECRET_KEY), mas avisa
+    # bem alto — sem isso configurado no Render, todo login vira token
+    # assinado com uma chave previsível, o que anula a proteção.
+    print("⚠️ SECRET_KEY não configurada — usando uma chave de DESENVOLVIMENTO. "
+          "Configure SECRET_KEY no ambiente antes de ir pra produção (veja .env.example).")
+    SECRET_KEY = "chave-de-desenvolvimento-troque-em-producao"
+
+TOKEN_VALIDADE_SEGUNDOS = 12 * 60 * 60  # 12h — precisa logar de novo depois disso
+
+
+def gerar_token(matricula: str) -> str:
+    """Token = matricula.expira, assinado com HMAC-SHA256. Tudo em
+    base64url pra viajar de boa num header Authorization."""
+    expira_em = int(time_lib.time()) + TOKEN_VALIDADE_SEGUNDOS
+    payload = f"{matricula}.{expira_em}"
+    assinatura = hmac.new(SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    bruto = f"{payload}.{assinatura}"
+    return base64.urlsafe_b64encode(bruto.encode()).decode()
+
+
+def _validar_token(token: str) -> Optional[str]:
+    """Devolve a matrícula se o token for válido e não tiver expirado; None caso contrário."""
+    try:
+        bruto = base64.urlsafe_b64decode(token.encode()).decode()
+        matricula, expira_em_str, assinatura = bruto.rsplit(".", 2)
+        payload = f"{matricula}.{expira_em_str}"
+        assinatura_esperada = hmac.new(SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(assinatura, assinatura_esperada):
+            return None
+        if int(expira_em_str) < int(time_lib.time()):
+            return None
+        return matricula
+    except Exception:
+        return None
+
+
+def exigir_login(authorization: Optional[str] = Header(None)) -> str:
+    """Dependency do FastAPI: exige um header 'Authorization: Bearer <token>'
+    válido. Devolve a matrícula de quem está autenticado."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise _HTTPException(status_code=401, detail="Não autenticado — faça login novamente.")
+    matricula = _validar_token(authorization[len("Bearer "):].strip())
+    if not matricula:
+        raise _HTTPException(status_code=401, detail="Sessão inválida ou expirada — faça login novamente.")
+    return matricula
+
+
+def exigir_admin(authorization: Optional[str] = Header(None)) -> str:
+    """Dependency do FastAPI: exige login válido E que a matrícula seja
+    uma das 3 ADM (MATRICULAS_ADM)."""
+    matricula = exigir_login(authorization)
+    if matricula not in MATRICULAS_ADM:
+        raise _HTTPException(status_code=403, detail="Ação restrita a administradores.")
+    return matricula
+
+
 # 🆕 Nome legível de cada área — usado nas notificações push (aviso
 # entre áreas e atividade extra), pra não mandar a chave crua
 # ("eletrica") na mensagem. Mesmas chaves de CHECKLIST_EXECUCAO_SECOES
