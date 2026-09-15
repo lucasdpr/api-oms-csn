@@ -1802,6 +1802,10 @@ class OficinaAtividade(BaseModel):
     # da fila da Ponte Rolante (ver routers/oficina.py), usado pra
     # calcular o tempo médio de espera da fila antes de criar um pedido.
     duracao_estimada_min: Optional[int] = None
+    # 🆕 Acessórios de içamento SUGERIDOS por quem pede (mesmo texto
+    # livre separado por vírgula usado em OficinaStatus.acessorios_ponte)
+    # — o técnico da ponte pode confirmar ou trocar ao Iniciar.
+    acessorios_ponte: Optional[str] = None
 
 
 class OficinaStatus(BaseModel):
@@ -1845,6 +1849,12 @@ class OficinaExcluir(BaseModel):
     id: int
     # 🆕 Mesma ideia do OficinaStatus.operador acima — opcional.
     operador: Optional[str] = None
+    # 🆕 Motivo da exclusão — opcional pra não quebrar quem já exclui
+    # sem motivo hoje (qualquer área da Central), mas OBRIGATÓRIO pra
+    # atividade da fila da Ponte Rolante (validado na rota, ver
+    # excluir_atividade_oficina): pedido de outra área some da fila,
+    # precisa ficar registrado por quê.
+    motivo: Optional[str] = None
 
 
 class OficinaAtividadeMensagem(BaseModel):

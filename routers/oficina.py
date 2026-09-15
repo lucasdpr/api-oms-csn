@@ -163,14 +163,14 @@ def criar_atividade_oficina(dados: OficinaAtividade):
         cursor.execute(
             """
             INSERT INTO oficina_atividades
-                (area, equipamento_id, descricao, responsavel, prioridade, status, criado_por, criado_em, foto_base64, prazo, data_inicio, solicitante_matricula, duracao_estimada_min, ordem_fila)
-            VALUES (%s, %s, %s, %s, %s, 'Pendente', %s, %s, %s, %s, %s, %s, %s,
+                (area, equipamento_id, descricao, responsavel, prioridade, status, criado_por, criado_em, foto_base64, prazo, data_inicio, solicitante_matricula, duracao_estimada_min, acessorios_ponte, ordem_fila)
+            VALUES (%s, %s, %s, %s, %s, 'Pendente', %s, %s, %s, %s, %s, %s, %s, %s,
                 COALESCE((SELECT MAX(ordem_fila) FROM oficina_atividades WHERE area = %s), 0) + 1)
             RETURNING id
             """,
             (dados.area, dados.equipamento_id, dados.descricao, dados.responsavel,
              dados.prioridade or "Normal", dados.operador, agora, dados.foto_base64, dados.prazo, dados.data_inicio, dados.solicitante_matricula,
-             dados.duracao_estimada_min, dados.area)
+             dados.duracao_estimada_min, dados.acessorios_ponte, dados.area)
         )
         atividade_id = cursor.fetchone()["id"]
         conn.commit()
@@ -613,8 +613,16 @@ def listar_mensagens_atividade_oficina(atividade_id: int):
 
 @router.post("/api/oficina/atividade/excluir", tags=["Oficina"], summary="Excluir atividade da Oficina")
 def excluir_atividade_oficina(dados: OficinaExcluir):
+    # 🆕 Fila da Ponte Rolante: excluir um pedido de outra área precisa
+    # de motivo — não dá pra só "sumir" com a solicitação de alguém sem
+    # dizer por quê. Outras áreas continuam sem essa exigência (ver
+    # comentário em OficinaExcluir.motivo).
     with get_db() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT area FROM oficina_atividades WHERE id = %s", (dados.id,))
+        linha_area = cursor.fetchone()
+        if linha_area and linha_area["area"] == "ponte-rolante" and not (dados.motivo or "").strip():
+            raise HTTPException(status_code=400, detail="Informe o motivo da exclusão.")
         # 🐛 CORRIGIDO ("excluí na área e continuou aparecendo no
         # Checklist de Execução"): a exclusão só tinha sido resolvida
         # no sentido Checklist -> Área (ver
@@ -638,7 +646,7 @@ def excluir_atividade_oficina(dados: OficinaExcluir):
     # 🆕 Registro persistente na Central — mesmo excluída, fica o rastro
     # de que existiu e foi removida (senão a atividade só "some" sem
     # explicação nenhuma pra quem não estava olhando bem na hora).
-    acao_texto = f"{dados.operador or 'Alguém'} excluiu: {linha['descricao']}"
+    acao_texto = f"{dados.operador or 'Alguém'} excluiu: {linha['descricao']}" + (f" (motivo: {dados.motivo.strip()})" if (dados.motivo or "").strip() else "")
     registrar_evento_atividade_oficina(
         operador=dados.operador,
         area=linha["area"],
