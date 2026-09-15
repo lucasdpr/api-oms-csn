@@ -1849,6 +1849,12 @@ class OficinaExcluir(BaseModel):
     id: int
     # 🆕 Mesma ideia do OficinaStatus.operador acima — opcional.
     operador: Optional[str] = None
+    # 🆕 Motivo da exclusão — opcional pra não quebrar quem já exclui
+    # sem motivo hoje (qualquer área da Central), mas OBRIGATÓRIO pra
+    # atividade da fila da Ponte Rolante (validado na rota, ver
+    # excluir_atividade_oficina): pedido de outra área some da fila,
+    # precisa ficar registrado por quê.
+    motivo: Optional[str] = None
 
 
 class OficinaAtividadeMensagem(BaseModel):

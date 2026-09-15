@@ -613,8 +613,16 @@ def listar_mensagens_atividade_oficina(atividade_id: int):
 
 @router.post("/api/oficina/atividade/excluir", tags=["Oficina"], summary="Excluir atividade da Oficina")
 def excluir_atividade_oficina(dados: OficinaExcluir):
+    # 🆕 Fila da Ponte Rolante: excluir um pedido de outra área precisa
+    # de motivo — não dá pra só "sumir" com a solicitação de alguém sem
+    # dizer por quê. Outras áreas continuam sem essa exigência (ver
+    # comentário em OficinaExcluir.motivo).
     with get_db() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT area FROM oficina_atividades WHERE id = %s", (dados.id,))
+        linha_area = cursor.fetchone()
+        if linha_area and linha_area["area"] == "ponte-rolante" and not (dados.motivo or "").strip():
+            raise HTTPException(status_code=400, detail="Informe o motivo da exclusão.")
         # 🐛 CORRIGIDO ("excluí na área e continuou aparecendo no
         # Checklist de Execução"): a exclusão só tinha sido resolvida
         # no sentido Checklist -> Área (ver
@@ -638,7 +646,7 @@ def excluir_atividade_oficina(dados: OficinaExcluir):
     # 🆕 Registro persistente na Central — mesmo excluída, fica o rastro
     # de que existiu e foi removida (senão a atividade só "some" sem
     # explicação nenhuma pra quem não estava olhando bem na hora).
-    acao_texto = f"{dados.operador or 'Alguém'} excluiu: {linha['descricao']}"
+    acao_texto = f"{dados.operador or 'Alguém'} excluiu: {linha['descricao']}" + (f" (motivo: {dados.motivo.strip()})" if (dados.motivo or "").strip() else "")
     registrar_evento_atividade_oficina(
         operador=dados.operador,
         area=linha["area"],
