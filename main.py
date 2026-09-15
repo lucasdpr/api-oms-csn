@@ -65,14 +65,6 @@ app = FastAPI(
     openapi_tags=tags_metadata,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # 🆕 "~100 rotas sem autenticação nenhuma" — achado numa revisão de
 # segurança (a mesma que corrigiu resetar_senha/mudar_cargo/
 # alternar_ativo/desfazer_apontamento_* com Depends(exigir_admin)).
@@ -106,6 +98,25 @@ class ExigirLoginEmEscritasMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(ExigirLoginEmEscritasMiddleware)
+
+# 🔧 CORREÇÃO ("ação falha com erro de CORS, mas o log mostra 401"):
+# no Starlette, quem é registrado por último em add_middleware fica
+# por FORA na pilha real. Com o CORSMiddleware registrado antes do
+# ExigirLoginEmEscritasMiddleware, ele ficava por DENTRO — então toda
+# vez que o middleware de login barrava uma escrita com 401 (retorno
+# direto, sem chamar call_next), a resposta nunca passava pelo CORS e
+# saía sem o header Access-Control-Allow-Origin. O navegador então
+# reportava "bloqueado por política de CORS" em vez do 401 real,
+# escondendo a causa verdadeira (token ausente/expirado). Registrando
+# o CORSMiddleware por último, ele fica por fora de tudo e sempre
+# adiciona os headers, inclusive em respostas de erro.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # 🗂️ main.py agora só monta o app e liga cada grupo de rotas (mesma
 # divisão por assunto que já aparecia no /docs, via `tags=[...]`) — a
