@@ -305,6 +305,7 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
         # 🆕 Fila da Ponte Rolante — qual ponte física (221/146) está
         # atendendo, escolhida ao Iniciar (ver OficinaStatus.ponte_utilizada).
         set_ponte = ", equipamento_id = %s" if (dados.ponte_utilizada or "").strip() else ""
+        set_acessorios = ", acessorios_ponte = %s" if (dados.acessorios_ponte or "").strip() else ""
         params = [dados.status, concluido_em, motivo_status]
         if set_executor:
             # 🆕 Prioriza os colaboradores escolhidos no modal (pode ser
@@ -313,12 +314,15 @@ def mudar_status_atividade_oficina(dados: OficinaStatus):
             params.append((dados.colaboradores or "").strip() or dados.operador)
         if set_ponte:
             params.append(dados.ponte_utilizada.strip())
+        if set_acessorios:
+            params.append(dados.acessorios_ponte.strip())
         params.append(dados.id)
         cursor.execute(
             "UPDATE oficina_atividades SET status = %s, concluido_em = %s, motivo_status = %s"
             + set_executor
             + set_reaberturas
             + set_ponte
+            + set_acessorios
             + (", notificado_atraso = FALSE" if resetar_notificacao else "")
             + " WHERE id = %s"
             + " RETURNING equipamento_id, descricao, area, solicitante_matricula, executado_por, reaberturas_count",
