@@ -163,14 +163,14 @@ def criar_atividade_oficina(dados: OficinaAtividade):
         cursor.execute(
             """
             INSERT INTO oficina_atividades
-                (area, equipamento_id, descricao, responsavel, prioridade, status, criado_por, criado_em, foto_base64, prazo, data_inicio, solicitante_matricula, duracao_estimada_min, ordem_fila)
-            VALUES (%s, %s, %s, %s, %s, 'Pendente', %s, %s, %s, %s, %s, %s, %s,
+                (area, equipamento_id, descricao, responsavel, prioridade, status, criado_por, criado_em, foto_base64, prazo, data_inicio, solicitante_matricula, duracao_estimada_min, acessorios_ponte, ordem_fila)
+            VALUES (%s, %s, %s, %s, %s, 'Pendente', %s, %s, %s, %s, %s, %s, %s, %s,
                 COALESCE((SELECT MAX(ordem_fila) FROM oficina_atividades WHERE area = %s), 0) + 1)
             RETURNING id
             """,
             (dados.area, dados.equipamento_id, dados.descricao, dados.responsavel,
              dados.prioridade or "Normal", dados.operador, agora, dados.foto_base64, dados.prazo, dados.data_inicio, dados.solicitante_matricula,
-             dados.duracao_estimada_min, dados.area)
+             dados.duracao_estimada_min, dados.acessorios_ponte, dados.area)
         )
         atividade_id = cursor.fetchone()["id"]
         conn.commit()
