@@ -671,6 +671,16 @@ def init_db():
             UPDATE oficina_atividades SET ordem_fila = id WHERE ordem_fila IS NULL
         ''')
 
+        # 🆕 Acessórios de içamento usados na Ponte Rolante (cabo 4
+        # pontas, gig do segmento, gig de cabo de aço, gig do zero, gig
+        # do bender, cabo de aço da área, cinta) — o técnico da ponte
+        # escolhe um ou mais ao Iniciar. Texto livre separado por vírgula
+        # (mesmo padrão já usado em `colaboradores`), não um enum —
+        # assim a lista de acessórios pode mudar no front sem migração.
+        cursor.execute('''
+            ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS acessorios_ponte TEXT
+        ''')
+
         # 🆕 HISTÓRICO DE REABERTURAS — antes de reabrir (ver mudar_status_
         # atividade_oficina com dados.reabertura=True), o UPDATE zera
         # concluido_em e SOBRESCREVE motivo_status com o motivo da
@@ -1820,6 +1830,15 @@ class OficinaStatus(BaseModel):
     # Iniciar normal. Sem isso, `motivo` continuaria opcional pra
     # qualquer "Em Andamento" — ver validação abaixo.
     reabertura: Optional[bool] = None
+    # 🆕 Fila da Ponte Rolante: qual ponte física (221 ou 146) está
+    # atendendo essa solicitação — escolhida pelo técnico ao Iniciar.
+    # Reaproveita a coluna equipamento_id (mesmo padrão usado por
+    # qualquer outra área pra linkar a atividade a um equipamento).
+    ponte_utilizada: Optional[str] = None
+    # 🆕 Acessórios de içamento escolhidos pelo técnico ao Iniciar (ex:
+    # "Cabo 4 Pontas, Cinta") — texto livre separado por vírgula, mesmo
+    # padrão de `colaboradores`.
+    acessorios_ponte: Optional[str] = None
 
 
 class OficinaExcluir(BaseModel):
