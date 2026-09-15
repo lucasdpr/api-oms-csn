@@ -643,6 +643,34 @@ def init_db():
             ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS reaberturas_count INTEGER DEFAULT 0
         ''')
 
+        # 🆕 FILA DA PONTE ROLANTE — pedido do usuário: as 12 áreas da
+        # oficina precisam poder solicitar as pontes rolantes (221 e 146,
+        # fila única compartilhada entre as duas) com prioridade própria
+        # (Urgente/Normal/Rápida — diferente do Alta/Normal/Baixa
+        # genérico usado nas outras áreas) e duração estimada, pra dar
+        # pro solicitante uma previsão de "tempo médio de espera" antes
+        # mesmo de criar o pedido (soma da duração estimada de tudo que
+        # ainda está pendente/em andamento na fila).
+        #
+        # duracao_estimada_min: minutos que a atividade deve levar usando
+        # a ponte — só a área de ponte-rolante usa isso (ver
+        # get_tempo_espera_ponte_rolante), mas fica disponível pra
+        # qualquer atividade caso outra área queira o mesmo no futuro.
+        #
+        # ordem_fila: posição manual na fila — nasce igual ao id (fila
+        # por ordem de chegada), mas o técnico da ponte OU o ADM podem
+        # reordenar (passar um pedido pra frente) sem mexer na ordem de
+        # criação real. Menor valor = mais perto de ser atendido.
+        cursor.execute('''
+            ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS duracao_estimada_min INTEGER
+        ''')
+        cursor.execute('''
+            ALTER TABLE oficina_atividades ADD COLUMN IF NOT EXISTS ordem_fila INTEGER
+        ''')
+        cursor.execute('''
+            UPDATE oficina_atividades SET ordem_fila = id WHERE ordem_fila IS NULL
+        ''')
+
         # 🆕 HISTÓRICO DE REABERTURAS — antes de reabrir (ver mudar_status_
         # atividade_oficina com dados.reabertura=True), o UPDATE zera
         # concluido_em e SOBRESCREVE motivo_status com o motivo da
@@ -1760,6 +1788,10 @@ class OficinaAtividade(BaseModel):
     # Atividade Extra" no Checklist de Execução — é pra ELE que a área
     # avisa se Recusar ou colocar "Aguardando" com motivo.
     solicitante_matricula: Optional[str] = None
+    # 🆕 Minutos estimados de uso — hoje só preenchido pelas solicitações
+    # da fila da Ponte Rolante (ver routers/oficina.py), usado pra
+    # calcular o tempo médio de espera da fila antes de criar um pedido.
+    duracao_estimada_min: Optional[int] = None
 
 
 class OficinaStatus(BaseModel):
@@ -1951,6 +1983,17 @@ class OficinaAtividadeEditar(BaseModel):
     data_inicio: Optional[str] = None
     foto_base64: Optional[str] = None  # null = sem foto anexada / mantém a que já tinha, ver rota
     # 🆕 Mesma ideia do OficinaStatus.operador — opcional.
+    operador: Optional[str] = None
+    duracao_estimada_min: Optional[int] = None
+
+
+class OficinaFilaReordenar(BaseModel):
+    # 🆕 Fila da Ponte Rolante — nova ordem completa da fila (lista de
+    # ids de atividades Pendente/Em Andamento, na ordem desejada). Quem
+    # pode chamar: o técnico da própria área (ponte-rolante) ou o ADM —
+    # front-end decide isso; a rota não distingue.
+    area: str
+    ids_em_ordem: list[int]
     operador: Optional[str] = None
 
 

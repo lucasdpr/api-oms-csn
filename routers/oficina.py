@@ -5,6 +5,7 @@ from app_core import (
     OficinaAtividadeEditar,
     OficinaAtividadeMensagem,
     OficinaExcluir,
+    OficinaFilaReordenar,
     OficinaMaterial,
     OficinaMaterialExcluir,
     OficinaNota,
@@ -162,12 +163,14 @@ def criar_atividade_oficina(dados: OficinaAtividade):
         cursor.execute(
             """
             INSERT INTO oficina_atividades
-                (area, equipamento_id, descricao, responsavel, prioridade, status, criado_por, criado_em, foto_base64, prazo, data_inicio, solicitante_matricula)
-            VALUES (%s, %s, %s, %s, %s, 'Pendente', %s, %s, %s, %s, %s, %s)
+                (area, equipamento_id, descricao, responsavel, prioridade, status, criado_por, criado_em, foto_base64, prazo, data_inicio, solicitante_matricula, duracao_estimada_min, ordem_fila)
+            VALUES (%s, %s, %s, %s, %s, 'Pendente', %s, %s, %s, %s, %s, %s, %s,
+                COALESCE((SELECT MAX(ordem_fila) FROM oficina_atividades WHERE area = %s), 0) + 1)
             RETURNING id
             """,
             (dados.area, dados.equipamento_id, dados.descricao, dados.responsavel,
-             dados.prioridade or "Normal", dados.operador, agora, dados.foto_base64, dados.prazo, dados.data_inicio, dados.solicitante_matricula)
+             dados.prioridade or "Normal", dados.operador, agora, dados.foto_base64, dados.prazo, dados.data_inicio, dados.solicitante_matricula,
+             dados.duracao_estimada_min, dados.area)
         )
         atividade_id = cursor.fetchone()["id"]
         conn.commit()
@@ -804,12 +807,14 @@ def editar_atividade_oficina(dados: OficinaAtividadeEditar):
             """
             UPDATE oficina_atividades
             SET equipamento_id = %s, descricao = %s, responsavel = %s,
-                prioridade = %s, prazo = %s, data_inicio = %s, foto_base64 = %s
+                prioridade = %s, prazo = %s, data_inicio = %s, foto_base64 = %s,
+                duracao_estimada_min = %s
             WHERE id = %s
             RETURNING area, solicitante_matricula
             """,
             (dados.equipamento_id, dados.descricao, dados.responsavel,
-             dados.prioridade or "Normal", dados.prazo, dados.data_inicio, dados.foto_base64, dados.id)
+             dados.prioridade or "Normal", dados.prazo, dados.data_inicio, dados.foto_base64,
+             dados.duracao_estimada_min, dados.id)
         )
         linha = cursor.fetchone()
         if not linha:
@@ -841,6 +846,70 @@ def editar_atividade_oficina(dados: OficinaAtividadeEditar):
     )
 
     return {"sucesso": True}
+
+
+# ==========================================
+# FILA DA PONTE ROLANTE — pedido do usuário: todas as áreas podem
+# solicitar as pontes (221 e 146, fila única — o técnico escolhe qual
+# ponte usa pra atender), com previsão de tempo de espera antes de criar
+# o pedido, e reordenação manual (técnico da ponte ou ADM podem passar
+# um pedido pra frente da fila).
+# ==========================================
+@router.get(
+    "/api/oficina/ponte_rolante/tempo_espera",
+    tags=["Oficina"],
+    summary="Tempo médio de espera da fila da Ponte Rolante (antes de criar um pedido)",
+)
+def get_tempo_espera_ponte_rolante():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS qtd,
+                   COALESCE(SUM(COALESCE(duracao_estimada_min, 30)), 0) AS minutos_totais
+            FROM oficina_atividades
+            WHERE area = 'ponte-rolante' AND status IN ('Pendente', 'Em Andamento')
+            """
+        )
+        linha = cursor.fetchone()
+    # 🆕 Atividade sem duração informada entra no cálculo com 30min (o
+    # "tempo médio" citado pelo usuário) em vez de 0 — senão um pedido
+    # antigo sem esse campo preenchido some da conta e a previsão fica
+    # otimista demais.
+    return {"atividades_na_fila": linha["qtd"], "minutos_estimados": int(linha["minutos_totais"])}
+
+
+@router.post(
+    "/api/oficina/ponte_rolante/reordenar",
+    tags=["Oficina"],
+    summary="Reordenar a fila da Ponte Rolante",
+)
+def reordenar_fila_ponte_rolante(dados: OficinaFilaReordenar):
+    if not dados.ids_em_ordem:
+        raise HTTPException(status_code=400, detail="Lista de ids vazia.")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        # 🆕 Cada id recebe sua posição (1, 2, 3...) na ordem enviada pelo
+        # front — o resto da fila (fora dessa lista) mantém a posição que
+        # já tinha, então não precisa mandar TODA a fila, só a parte que
+        # o usuário reordenou visualmente.
+        for posicao, atividade_id in enumerate(dados.ids_em_ordem, start=1):
+            cursor.execute(
+                "UPDATE oficina_atividades SET ordem_fila = %s WHERE id = %s AND area = %s",
+                (posicao, atividade_id, dados.area)
+            )
+        conn.commit()
+
+    registrar_evento_atividade_oficina(
+        operador=dados.operador,
+        area=dados.area,
+        peca_id=None,
+        acao=f"{dados.operador or 'Alguém'} reordenou a fila da Ponte Rolante",
+        atividade_id=dados.ids_em_ordem[0],
+        tipo_evento="reordenacao"
+    )
+    return {"sucesso": True}
+
 
 # ==========================================
 # PROCEDIMENTOS (checklist de etapas por área)
