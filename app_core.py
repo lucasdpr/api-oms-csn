@@ -1820,6 +1820,11 @@ class OficinaStatus(BaseModel):
     # Iniciar normal. Sem isso, `motivo` continuaria opcional pra
     # qualquer "Em Andamento" — ver validação abaixo.
     reabertura: Optional[bool] = None
+    # 🆕 Fila da Ponte Rolante: qual ponte física (221 ou 146) está
+    # atendendo essa solicitação — escolhida pelo técnico ao Iniciar.
+    # Reaproveita a coluna equipamento_id (mesmo padrão usado por
+    # qualquer outra área pra linkar a atividade a um equipamento).
+    ponte_utilizada: Optional[str] = None
 
 
 class OficinaExcluir(BaseModel):
