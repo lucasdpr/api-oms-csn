@@ -1173,6 +1173,14 @@ def init_db():
                 lida BOOLEAN DEFAULT FALSE
             )
         ''')
+        # 🆕 Foto anexada (câmera ou galeria) — pedido do usuário: "um chat
+        # direto e posso anexar uma foto ou tirar uma foto". Mesmo padrão
+        # já usado em qualidade_fotos/registros_ocorrencia (base64 direto
+        # na tabela, sem storage externo). `mensagem` virou opcional na
+        # escrita (ver MensagemAreaAdmEnviar) pra permitir mandar só a
+        # foto, sem legenda nenhuma.
+        cursor.execute('''ALTER TABLE mensagens_area_adm ADD COLUMN IF NOT EXISTS foto_base64 TEXT''')
+        cursor.execute('''ALTER TABLE mensagens_area_adm ALTER COLUMN mensagem DROP NOT NULL''')
 
         # 🌱 Seed único da área "segmento-grupo": já existia uma lista real
         # de materiais (Grupos 1+2+3, do documento oficial da CSN) usada
@@ -2125,7 +2133,11 @@ class MensagemAreaAdmEnviar(BaseModel):
     de_adm: bool = False
     remetente: Optional[str] = None
     remetente_matricula: Optional[str] = None
-    mensagem: str
+    # 🆕 mensagem virou opcional (default "") — permite mandar só uma foto,
+    # sem legenda. foto_base64 é opcional (câmera ou galeria, mesmo padrão
+    # de qualidade_fotos/registros_ocorrencia).
+    mensagem: str = ""
+    foto_base64: Optional[str] = None
 
 
 class MensagemAreaAdmMarcarLida(BaseModel):

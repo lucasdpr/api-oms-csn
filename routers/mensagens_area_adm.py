@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from app_core import (
     MensagemAreaAdmEnviar,
     MensagemAreaAdmMarcarLida,
@@ -26,7 +26,7 @@ def get_mensagens_area(area: str):
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, area, de_adm, remetente, remetente_matricula, mensagem, criado_em, lida
+            SELECT id, area, de_adm, remetente, remetente_matricula, mensagem, foto_base64, criado_em, lida
             FROM mensagens_area_adm
             WHERE area = %s
             ORDER BY id ASC
@@ -67,28 +67,35 @@ def get_mensagens_area_nao_lidas(area: str):
         return {"nao_lidas": cursor.fetchone()["qtd"]}
 
 
-@router.post("/api/mensagens_area", tags=["Mensagens Área-ADM"], summary="Enviar mensagem na conversa área <-> ADM")
+@router.post("/api/mensagens_area", tags=["Mensagens Área-ADM"], summary="Enviar mensagem (texto e/ou foto) na conversa área <-> ADM")
 def enviar_mensagem_area(dados: MensagemAreaAdmEnviar):
+    # 🆕 Com a foto virando opcional, precisa ter pelo menos UM dos dois —
+    # senão seria uma mensagem completamente vazia.
+    texto = (dados.mensagem or "").strip()
+    if not texto and not dados.foto_base64:
+        raise HTTPException(status_code=400, detail="Mande um texto ou uma foto.")
+
     agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO mensagens_area_adm (area, de_adm, remetente, remetente_matricula, mensagem, criado_em, lida)
-            VALUES (%s, %s, %s, %s, %s, %s, FALSE)
+            INSERT INTO mensagens_area_adm (area, de_adm, remetente, remetente_matricula, mensagem, foto_base64, criado_em, lida)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, FALSE)
             RETURNING id
             """,
-            (dados.area, dados.de_adm, dados.remetente, dados.remetente_matricula, dados.mensagem, agora)
+            (dados.area, dados.de_adm, dados.remetente, dados.remetente_matricula, texto, dados.foto_base64, agora)
         )
         nova_id = cursor.fetchone()["id"]
         conn.commit()
 
     nome_area = AREA_OFICINA_NOMES.get(dados.area, dados.area)
+    corpo_push = texto if texto else "📷 Foto enviada"
     if dados.de_adm:
         # ADM respondeu -> avisa quem está na área.
         enviar_push_para_area(
             titulo=f"💬 ADM respondeu — {nome_area}",
-            corpo=dados.mensagem,
+            corpo=corpo_push,
             area=dados.area,
             url="/app.html#area-oficina",
             dados_extra={"tipo_evento": "mensagem_adm", "area": dados.area}
@@ -98,7 +105,7 @@ def enviar_mensagem_area(dados: MensagemAreaAdmEnviar):
         # por qualquer evento sem destino de técnico específico).
         enviar_push_para_area(
             titulo=f"💬 Mensagem da {nome_area}",
-            corpo=f"{dados.remetente or 'Técnico'}: {dados.mensagem}",
+            corpo=f"{dados.remetente or 'Técnico'}: {corpo_push}",
             area="Ambos",
             url="/app.html#painel-adm",
             dados_extra={"tipo_evento": "mensagem_area", "area": dados.area}
