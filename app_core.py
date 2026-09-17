@@ -1193,6 +1193,15 @@ def init_db():
         # "OS #123 — Troca de rolamento", pra aparecer marcado no chat.
         cursor.execute('''ALTER TABLE mensagens_area_adm ADD COLUMN IF NOT EXISTS canal TEXT NOT NULL DEFAULT 'supervisao' ''')
         cursor.execute('''ALTER TABLE mensagens_area_adm ADD COLUMN IF NOT EXISTS atividade_referencia TEXT''')
+        # 🆕 pedido do usuário, com exemplo: "caldeiraria tem que ter chat
+        # com o molde, bender, zero etc, tem que ter com todos, e o molde
+        # tem que ter com bender, zero etc e todas as áreas" — o canal
+        # 'tecnicos' deixou de ser "só dentro da própria área" e virou
+        # área-a-área: `area` é quem mandou, `area_destino` é a área
+        # alvo daquela mensagem específica. Uma conversa entre X e Y é a
+        # união das linhas (area=X,area_destino=Y) e (area=Y,area_destino=X).
+        # NULL em area_destino significa canal 'supervisao' (alvo é o ADM).
+        cursor.execute('''ALTER TABLE mensagens_area_adm ADD COLUMN IF NOT EXISTS area_destino TEXT''')
 
         # 🌱 Seed único da área "segmento-grupo": já existia uma lista real
         # de materiais (Grupos 1+2+3, do documento oficial da CSN) usada
@@ -2156,12 +2165,20 @@ class MensagemAreaAdmEnviar(BaseModel):
     # uma "Conversa da Atividade" (ex: "OS #123 — Troca de rolamento").
     canal: str = "supervisao"
     atividade_referencia: Optional[str] = None
+    # 🆕 obrigatório quando canal='tecnicos' — a OUTRA área da conversa
+    # (ex: area='caldeiraria', area_destino='molde'). Ignorado/None
+    # quando canal='supervisao' (alvo é sempre o ADM).
+    area_destino: Optional[str] = None
 
 
 class MensagemAreaAdmMarcarLida(BaseModel):
     area: str
     de_adm: bool  # quem está chamando: True = ADM lendo, False = a própria área lendo
     matricula: Optional[str] = None  # se vier, também marca lido na Central (notificacoes_lidas)
+    # 🆕 obrigatório quando o canal sendo lido é 'tecnicos' — a outra
+    # área do par que está sendo marcado como lido.
+    area_destino: Optional[str] = None
+    canal: str = "supervisao"
 
 
 
