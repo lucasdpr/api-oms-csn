@@ -1181,6 +1181,18 @@ def init_db():
         # foto, sem legenda nenhuma.
         cursor.execute('''ALTER TABLE mensagens_area_adm ADD COLUMN IF NOT EXISTS foto_base64 TEXT''')
         cursor.execute('''ALTER TABLE mensagens_area_adm ALTER COLUMN mensagem DROP NOT NULL''')
+        # 🆕 Canal dentro da MESMA conversa da área (pedido do usuário: "em
+        # um chat só, tem a mensagem pra supervisão e a mensagem entre os
+        # técnicos, que a supervisão e os adm podem ver"):
+        # - 'supervisao' (padrão, comportamento de sempre): área <-> ADM.
+        # - 'tecnicos': só entre quem é da área — ADM/supervisão só LÊ
+        #   (a tela do ADM abre esse canal sem campo de envio).
+        # atividade_referencia é preenchido quando a mensagem é espelhada
+        # automaticamente de uma "Conversa da Atividade" (ver
+        # enviarMensagemConversaAtividade no frontend) — guarda algo como
+        # "OS #123 — Troca de rolamento", pra aparecer marcado no chat.
+        cursor.execute('''ALTER TABLE mensagens_area_adm ADD COLUMN IF NOT EXISTS canal TEXT NOT NULL DEFAULT 'supervisao' ''')
+        cursor.execute('''ALTER TABLE mensagens_area_adm ADD COLUMN IF NOT EXISTS atividade_referencia TEXT''')
 
         # 🌱 Seed único da área "segmento-grupo": já existia uma lista real
         # de materiais (Grupos 1+2+3, do documento oficial da CSN) usada
@@ -2138,6 +2150,12 @@ class MensagemAreaAdmEnviar(BaseModel):
     # de qualidade_fotos/registros_ocorrencia).
     mensagem: str = ""
     foto_base64: Optional[str] = None
+    # 🆕 canal: 'supervisao' (área<->ADM, padrão) ou 'tecnicos' (só entre
+    # quem é da área, supervisão/ADM só lê). atividade_referencia: texto
+    # curto identificando a atividade quando a mensagem vem espelhada de
+    # uma "Conversa da Atividade" (ex: "OS #123 — Troca de rolamento").
+    canal: str = "supervisao"
+    atividade_referencia: Optional[str] = None
 
 
 class MensagemAreaAdmMarcarLida(BaseModel):

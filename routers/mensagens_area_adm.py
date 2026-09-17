@@ -20,32 +20,37 @@ router = APIRouter()
 # ==========================================================================
 
 
-@router.get("/api/mensagens_area", tags=["Mensagens Área-ADM"], summary="Listar conversa de uma área com o ADM")
-def get_mensagens_area(area: str):
+@router.get("/api/mensagens_area", tags=["Mensagens Área-ADM"], summary="Listar conversa de uma área — canal 'supervisao' (área<->ADM) ou 'tecnicos' (só entre a área, supervisão só lê)")
+def get_mensagens_area(area: str, canal: str = "supervisao"):
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, area, de_adm, remetente, remetente_matricula, mensagem, foto_base64, criado_em, lida
+            SELECT id, area, de_adm, remetente, remetente_matricula, mensagem, foto_base64, canal, atividade_referencia, criado_em, lida
             FROM mensagens_area_adm
-            WHERE area = %s
+            WHERE area = %s AND canal = %s
             ORDER BY id ASC
             """,
-            (area,)
+            (area, canal)
         )
         return cursor.fetchall()
 
 
-@router.get("/api/mensagens_area/resumo", tags=["Mensagens Área-ADM"], summary="Resumo por área — última mensagem e não lidas (visão do ADM)")
+@router.get("/api/mensagens_area/resumo", tags=["Mensagens Área-ADM"], summary="Resumo por área — última mensagem e não lidas do canal 'supervisao' (visão do ADM)")
 def get_mensagens_area_resumo():
     with get_db() as conn:
         cursor = conn.cursor()
+        # 🆕 Só o canal 'supervisao' entra no resumo — é o que aparece como
+        # badge/prévia na lista de conversas do ADM. O canal 'tecnicos' é
+        # visualizado à parte (aba "Entre Técnicos" dentro da mesma
+        # conversa), sem contar pra esse resumo.
         cursor.execute(
             """
             SELECT area,
                    MAX(criado_em) AS ultima_em,
                    SUM(CASE WHEN de_adm = FALSE AND lida = FALSE THEN 1 ELSE 0 END) AS nao_lidas
             FROM mensagens_area_adm
+            WHERE canal = 'supervisao'
             GROUP BY area
             ORDER BY ultima_em DESC
             """
@@ -75,23 +80,35 @@ def enviar_mensagem_area(dados: MensagemAreaAdmEnviar):
     if not texto and not dados.foto_base64:
         raise HTTPException(status_code=400, detail="Mande um texto ou uma foto.")
 
+    canal = dados.canal if dados.canal in ("supervisao", "tecnicos") else "supervisao"
     agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO mensagens_area_adm (area, de_adm, remetente, remetente_matricula, mensagem, foto_base64, criado_em, lida)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, FALSE)
+            INSERT INTO mensagens_area_adm (area, de_adm, remetente, remetente_matricula, mensagem, foto_base64, canal, atividade_referencia, criado_em, lida)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE)
             RETURNING id
             """,
-            (dados.area, dados.de_adm, dados.remetente, dados.remetente_matricula, texto, dados.foto_base64, agora)
+            (dados.area, dados.de_adm, dados.remetente, dados.remetente_matricula, texto, dados.foto_base64, canal, dados.atividade_referencia, agora)
         )
         nova_id = cursor.fetchone()["id"]
         conn.commit()
 
     nome_area = AREA_OFICINA_NOMES.get(dados.area, dados.area)
     corpo_push = texto if texto else "📷 Foto enviada"
-    if dados.de_adm:
+    if canal == "tecnicos":
+        # 🆕 Canal "Entre Técnicos" — avisa só quem é da própria área (não
+        # incomoda o ADM com push; ele pode ver quando quiser, na aba
+        # "Entre Técnicos" da mesma conversa).
+        enviar_push_para_area(
+            titulo=f"💬 {nome_area} (entre técnicos)",
+            corpo=f"{dados.remetente or 'Técnico'}: {corpo_push}",
+            area=dados.area,
+            url="/app.html#area-oficina",
+            dados_extra={"tipo_evento": "mensagem_area_tecnicos", "area": dados.area}
+        )
+    elif dados.de_adm:
         # ADM respondeu -> avisa quem está na área.
         enviar_push_para_area(
             titulo=f"💬 ADM respondeu — {nome_area}",
@@ -121,8 +138,11 @@ def marcar_mensagens_area_lidas(dados: MensagemAreaAdmMarcarLida):
         cursor = conn.cursor()
         # Quem chama é quem LEU — então marca como lida a mensagem que
         # partiu do OUTRO lado (de_adm invertido em relação a quem pediu).
+        # 🆕 canal = 'supervisao' explícito — a contagem de não lidas só
+        # existe pro canal principal (área<->ADM); "Entre Técnicos" não
+        # tem badge de não lida, então nunca deve ser tocado aqui.
         cursor.execute(
-            "UPDATE mensagens_area_adm SET lida = TRUE WHERE area = %s AND de_adm = %s AND lida = FALSE RETURNING id",
+            "UPDATE mensagens_area_adm SET lida = TRUE WHERE area = %s AND canal = 'supervisao' AND de_adm = %s AND lida = FALSE RETURNING id",
             (dados.area, not dados.de_adm)
         )
         ids_marcados = [linha["id"] for linha in cursor.fetchall()]
