@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from typing import Optional
 from app_core import (
     MensagemAreaAdmEnviar,
     MensagemAreaAdmMarcarLida,
@@ -17,22 +18,45 @@ router = APIRouter()
 # automáticos (nova atividade, atraso, etc). Aqui é uma conversa
 # persistente por área, igual um chat: qualquer lado manda mensagem, o
 # outro lado recebe push, e dá pra ver o histórico depois.
+#
+# 🆕 canal 'tecnicos' virou ÁREA-A-ÁREA (pedido do usuário, com exemplo:
+# "caldeiraria tem que ter chat com o molde, bender, zero etc, tem que
+# ter com todos, e o molde tem que ter com bender, zero etc e todas as
+# áreas"). Cada mensagem tem `area` (quem mandou) e `area_destino` (a
+# área alvo daquela mensagem); a conversa entre X e Y é a união das
+# linhas nos dois sentidos. `area_destino` é sempre NULL no canal
+# 'supervisao' (o alvo ali é sempre o ADM).
 # ==========================================================================
 
 
-@router.get("/api/mensagens_area", tags=["Mensagens Área-ADM"], summary="Listar conversa de uma área — canal 'supervisao' (área<->ADM) ou 'tecnicos' (só entre a área, supervisão só lê)")
-def get_mensagens_area(area: str, canal: str = "supervisao"):
+@router.get("/api/mensagens_area", tags=["Mensagens Área-ADM"], summary="Listar conversa — canal 'supervisao' (área<->ADM) ou 'tecnicos' (área<->área, exige area_destino)")
+def get_mensagens_area(area: str, canal: str = "supervisao", area_destino: Optional[str] = None):
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT id, area, de_adm, remetente, remetente_matricula, mensagem, foto_base64, canal, atividade_referencia, criado_em, lida
-            FROM mensagens_area_adm
-            WHERE area = %s AND canal = %s
-            ORDER BY id ASC
-            """,
-            (area, canal)
-        )
+        if canal == "tecnicos":
+            if not area_destino:
+                raise HTTPException(status_code=400, detail="area_destino é obrigatório no canal 'tecnicos'.")
+            cursor.execute(
+                """
+                SELECT id, area, area_destino, de_adm, remetente, remetente_matricula, mensagem, foto_base64, canal, atividade_referencia, criado_em, lida
+                FROM mensagens_area_adm
+                WHERE canal = 'tecnicos' AND (
+                    (area = %s AND area_destino = %s) OR (area = %s AND area_destino = %s)
+                )
+                ORDER BY id ASC
+                """,
+                (area, area_destino, area_destino, area)
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id, area, area_destino, de_adm, remetente, remetente_matricula, mensagem, foto_base64, canal, atividade_referencia, criado_em, lida
+                FROM mensagens_area_adm
+                WHERE area = %s AND canal = %s
+                ORDER BY id ASC
+                """,
+                (area, canal)
+            )
         return cursor.fetchall()
 
 
@@ -40,10 +64,9 @@ def get_mensagens_area(area: str, canal: str = "supervisao"):
 def get_mensagens_area_resumo():
     with get_db() as conn:
         cursor = conn.cursor()
-        # 🆕 Só o canal 'supervisao' entra no resumo — é o que aparece como
-        # badge/prévia na lista de conversas do ADM. O canal 'tecnicos' é
-        # visualizado à parte (aba "Entre Técnicos" dentro da mesma
-        # conversa), sem contar pra esse resumo.
+        # 🆕 Só o canal 'supervisao' entra aqui — é o que aparece como
+        # badge/prévia na lista de conversas do ADM. O canal 'tecnicos'
+        # (área-a-área) tem seu próprio resumo, ver /resumo_tecnicos.
         cursor.execute(
             """
             SELECT area,
@@ -61,6 +84,34 @@ def get_mensagens_area_resumo():
         return linhas
 
 
+@router.get("/api/mensagens_area/resumo_tecnicos", tags=["Mensagens Área-ADM"], summary="Resumo das conversas área-a-área (canal 'tecnicos') de uma área, com todas as outras")
+def get_mensagens_area_resumo_tecnicos(area: str):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        # Pega toda mensagem onde a área é qualquer um dos dois lados do
+        # par, normaliza "quem é a OUTRA área" num CASE, e agrupa por ela.
+        # Não-lida = mensagem que a área não mandou (veio do outro lado)
+        # e ainda não foi marcada lida — não depende de qual dos dois
+        # lados fisicamente escreveu na coluna `area`.
+        cursor.execute(
+            """
+            SELECT
+                CASE WHEN area = %s THEN area_destino ELSE area END AS outra_area,
+                MAX(criado_em) AS ultima_em,
+                SUM(CASE WHEN area != %s AND lida = FALSE THEN 1 ELSE 0 END) AS nao_lidas
+            FROM mensagens_area_adm
+            WHERE canal = 'tecnicos' AND (area = %s OR area_destino = %s)
+            GROUP BY outra_area
+            ORDER BY ultima_em DESC
+            """,
+            (area, area, area, area)
+        )
+        linhas = cursor.fetchall()
+        for linha in linhas:
+            linha["nome_area"] = AREA_OFICINA_NOMES.get(linha["outra_area"], linha["outra_area"])
+        return linhas
+
+
 @router.get("/api/mensagens_area/nao_lidas", tags=["Mensagens Área-ADM"], summary="Quantidade de mensagens do ADM não lidas por uma área")
 def get_mensagens_area_nao_lidas(area: str):
     with get_db() as conn:
@@ -72,7 +123,7 @@ def get_mensagens_area_nao_lidas(area: str):
         return {"nao_lidas": cursor.fetchone()["qtd"]}
 
 
-@router.post("/api/mensagens_area", tags=["Mensagens Área-ADM"], summary="Enviar mensagem (texto e/ou foto) na conversa área <-> ADM")
+@router.post("/api/mensagens_area", tags=["Mensagens Área-ADM"], summary="Enviar mensagem (texto e/ou foto) — área<->ADM ou área<->área")
 def enviar_mensagem_area(dados: MensagemAreaAdmEnviar):
     # 🆕 Com a foto virando opcional, precisa ter pelo menos UM dos dois —
     # senão seria uma mensagem completamente vazia.
@@ -81,16 +132,22 @@ def enviar_mensagem_area(dados: MensagemAreaAdmEnviar):
         raise HTTPException(status_code=400, detail="Mande um texto ou uma foto.")
 
     canal = dados.canal if dados.canal in ("supervisao", "tecnicos") else "supervisao"
+    area_destino = None
+    if canal == "tecnicos":
+        if not dados.area_destino or dados.area_destino == dados.area:
+            raise HTTPException(status_code=400, detail="área_destino é obrigatória e precisa ser diferente da área de origem no canal 'tecnicos'.")
+        area_destino = dados.area_destino
+
     agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO mensagens_area_adm (area, de_adm, remetente, remetente_matricula, mensagem, foto_base64, canal, atividade_referencia, criado_em, lida)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE)
+            INSERT INTO mensagens_area_adm (area, area_destino, de_adm, remetente, remetente_matricula, mensagem, foto_base64, canal, atividade_referencia, criado_em, lida)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE)
             RETURNING id
             """,
-            (dados.area, dados.de_adm, dados.remetente, dados.remetente_matricula, texto, dados.foto_base64, canal, dados.atividade_referencia, agora)
+            (dados.area, area_destino, dados.de_adm, dados.remetente, dados.remetente_matricula, texto, dados.foto_base64, canal, dados.atividade_referencia, agora)
         )
         nova_id = cursor.fetchone()["id"]
         conn.commit()
@@ -98,15 +155,14 @@ def enviar_mensagem_area(dados: MensagemAreaAdmEnviar):
     nome_area = AREA_OFICINA_NOMES.get(dados.area, dados.area)
     corpo_push = texto if texto else "📷 Foto enviada"
     if canal == "tecnicos":
-        # 🆕 Canal "Entre Técnicos" — avisa só quem é da própria área (não
-        # incomoda o ADM com push; ele pode ver quando quiser, na aba
-        # "Entre Técnicos" da mesma conversa).
+        # 🆕 Área-a-área — avisa só a área DESTINO dessa mensagem.
+        nome_area_destino = AREA_OFICINA_NOMES.get(area_destino, area_destino)
         enviar_push_para_area(
-            titulo=f"💬 {nome_area} (entre técnicos)",
+            titulo=f"💬 {nome_area} → {nome_area_destino}",
             corpo=f"{dados.remetente or 'Técnico'}: {corpo_push}",
-            area=dados.area,
+            area=area_destino,
             url="/app.html#area-oficina",
-            dados_extra={"tipo_evento": "mensagem_area_tecnicos", "area": dados.area}
+            dados_extra={"tipo_evento": "mensagem_area_tecnicos", "area": dados.area, "area_destino": area_destino}
         )
     elif dados.de_adm:
         # ADM respondeu -> avisa quem está na área.
@@ -136,15 +192,29 @@ def marcar_mensagens_area_lidas(dados: MensagemAreaAdmMarcarLida):
     agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
-        # Quem chama é quem LEU — então marca como lida a mensagem que
-        # partiu do OUTRO lado (de_adm invertido em relação a quem pediu).
-        # 🆕 canal = 'supervisao' explícito — a contagem de não lidas só
-        # existe pro canal principal (área<->ADM); "Entre Técnicos" não
-        # tem badge de não lida, então nunca deve ser tocado aqui.
-        cursor.execute(
-            "UPDATE mensagens_area_adm SET lida = TRUE WHERE area = %s AND canal = 'supervisao' AND de_adm = %s AND lida = FALSE RETURNING id",
-            (dados.area, not dados.de_adm)
-        )
+        if dados.canal == "tecnicos":
+            if not dados.area_destino:
+                raise HTTPException(status_code=400, detail="area_destino é obrigatório pra marcar lido no canal 'tecnicos'.")
+            # Marca como lida toda mensagem do par (área, area_destino) em
+            # QUALQUER sentido que não tenha partido de quem está chamando
+            # (dados.area) — ou seja, a mensagem que ele ainda não leu.
+            cursor.execute(
+                """
+                UPDATE mensagens_area_adm SET lida = TRUE
+                WHERE canal = 'tecnicos' AND area != %s AND lida = FALSE AND (
+                    (area = %s AND area_destino = %s) OR (area = %s AND area_destino = %s)
+                )
+                RETURNING id
+                """,
+                (dados.area, dados.area, dados.area_destino, dados.area_destino, dados.area)
+            )
+        else:
+            # Quem chama é quem LEU — então marca como lida a mensagem que
+            # partiu do OUTRO lado (de_adm invertido em relação a quem pediu).
+            cursor.execute(
+                "UPDATE mensagens_area_adm SET lida = TRUE WHERE area = %s AND canal = 'supervisao' AND de_adm = %s AND lida = FALSE RETURNING id",
+                (dados.area, not dados.de_adm)
+            )
         ids_marcados = [linha["id"] for linha in cursor.fetchall()]
         # 🐛 CORREÇÃO ("respondi no ADM e não sumiu da Central"): ler a
         # conversa aqui só marcava lida em mensagens_area_adm — a Central
