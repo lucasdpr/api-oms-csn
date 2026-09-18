@@ -849,6 +849,16 @@ def init_db():
         # "Em Andamento" numa máquina, ela é considerada "em manutenção"
         # (ver GET /api/maquinas/status, em routers/ordens_servico.py).
         cursor.execute('''ALTER TABLE ordens_servico ADD COLUMN IF NOT EXISTS maquina TEXT''')
+        # 🆕 Uma OS pode envolver VÁRIAS áreas ao mesmo tempo (pedido do
+        # usuário) — a coluna `area` (singular, acima) fica mantida só
+        # por compatibilidade com quem já tinha essa coluna, mas deixa
+        # de ser usada pra escrita nova. `areas` é a lista de verdade, e
+        # é o que faz a OS aparecer no quadro de trabalho de CADA área
+        # marcada (ver GET /api/oficina/atividades... não, ver
+        # listar_ordens_servico com filtro area= e
+        # renderizarAtividadesArea no front, que passa a mesclar OS
+        # junto com oficina_atividades).
+        cursor.execute('''ALTER TABLE ordens_servico ADD COLUMN IF NOT EXISTS areas TEXT[] ''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS os_fotos (
@@ -2098,8 +2108,9 @@ class OrdemServicoCriar(BaseModel):
     descricao: Optional[str] = None
     fotos_base64: list[str] = []  # 1 OS pode ter várias páginas/fotos
     operador: str
-    area: Optional[str] = None  # 🆕 chave de AREAS_OFICINA, ex: "hidraulica" — opcional
+    area: Optional[str] = None  # 🔧 mantido só por compatibilidade — usar `areas` daqui pra frente
     maquina: Optional[str] = None  # 🆕 MCC que a OS afeta, ex: "MCC 2" — opcional
+    areas: list[str] = []  # 🆕 chaves de AREAS_OFICINA — a OS aparece no quadro de trabalho de CADA uma
 
 
 class OrdemServicoStatus(BaseModel):
