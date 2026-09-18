@@ -2230,6 +2230,10 @@ class MensagemAreaAdmMarcarLida(BaseModel):
     area_destino: Optional[str] = None
     canal: str = "supervisao"
 
+class MensagemAreaAdmDigitando(BaseModel):
+    area: str  # quem está digitando
+    area_destino: str  # pra quem
+
 
 
 # Matrículas com acesso total a todas as áreas da Oficina (ADM). As

@@ -190,6 +190,28 @@ def heartbeat_colaborador(dados: ColaboradorHeartbeat):
     return {"sucesso": True}
 
 
+@router.get("/api/colaboradores/presenca_area", tags=["Colaboradores"], summary="Presença agregada de uma área (pro cabeçalho do chat Entre Técnicos)")
+def get_presenca_area(area: str):
+    """🆕 Pedido do usuário: mostrar Online/Offline + último acesso no
+    topo da conversa "Entre Técnicos" (igual WhatsApp) — como esse
+    canal é ÁREA-a-área (pode ter mais de 1 técnico na mesma área), a
+    presença é agregada: pega o ultimo_acesso MAIS RECENTE entre quem
+    está escalado pra essa área (equipe_oficina), e o front decide
+    Online/Offline com a mesma janela já usada na Administração de
+    Colaboradores (ver window.formatarPresencaColaborador)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT MAX(c.ultimo_acesso) AS ultimo_acesso
+            FROM colaboradores c
+            JOIN equipe_oficina e ON e.matricula = c.matricula
+            WHERE e.area = %s AND e.ativo = TRUE
+            """,
+            (area,)
+        )
+        linha = cursor.fetchone()
+        return {"ultimo_acesso": linha["ultimo_acesso"] if linha else None}
 
 
 @router.post("/api/colaboradores/mudar_cargo", tags=["Colaboradores"], summary="Trocar o cargo de um colaborador")
