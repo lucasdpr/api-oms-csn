@@ -829,6 +829,10 @@ def init_db():
         # 🆕 Mesma ideia de área de log_eventos.area — opcional, pra dar
         # contexto na Central de Notificações.
         cursor.execute('''ALTER TABLE ordens_servico ADD COLUMN IF NOT EXISTS area TEXT''')
+        # 🆕 Qual máquina (MCC) a OS está atendendo — enquanto a OS estiver
+        # "Em Andamento" numa máquina, ela é considerada "em manutenção"
+        # (ver GET /api/maquinas/status, em routers/ordens_servico.py).
+        cursor.execute('''ALTER TABLE ordens_servico ADD COLUMN IF NOT EXISTS maquina TEXT''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS os_fotos (
@@ -2061,6 +2065,7 @@ class OrdemServicoCriar(BaseModel):
     fotos_base64: list[str] = []  # 1 OS pode ter várias páginas/fotos
     operador: str
     area: Optional[str] = None  # 🆕 chave de AREAS_OFICINA, ex: "hidraulica" — opcional
+    maquina: Optional[str] = None  # 🆕 MCC que a OS afeta, ex: "MCC 2" — opcional
 
 
 class OrdemServicoStatus(BaseModel):
