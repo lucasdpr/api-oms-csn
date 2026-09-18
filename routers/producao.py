@@ -22,6 +22,12 @@ def apontar_producao_geral(dados: ProducaoGeral):
         cursor = conn.cursor()
         for qtd in (dados.qtd_mcc2, dados.qtd_mcc3, dados.qtd_mcc4):
             if qtd and qtd > 0:
+                # 🔧 CORREÇÃO ("osciladores contabilizando tonelagem"):
+                # Oscilador e Mesa Osciladora reaproveitam a coluna
+                # `tonelagem` pra guardar DIAS de vida, não toneladas
+                # lingotadas (mesmo motivo do filtro de MOLDE logo
+                # abaixo) — sem isso, cada apontamento inflava a
+                # contagem de dias desses itens com a tonelagem lançada.
                 cursor.execute("""
                     UPDATE equipamentos
                     SET tonelagem = COALESCE(tonelagem, 0) + %s
@@ -30,6 +36,7 @@ def apontar_producao_geral(dados: ProducaoGeral):
                          OR local LIKE '%%Veio E%%' OR local LIKE '%%Veio F%%'
                          OR local LIKE '%%Veio G%%' OR local LIKE '%%Veio H%%')
                     AND UPPER(tipo) NOT LIKE '%%MOLDE%%'
+                    AND UPPER(tipo) NOT IN ('OSCILADOR', 'MESA OSCILADORA')
                 """, (qtd,))
 
         cursor.execute(
