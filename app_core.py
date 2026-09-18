@@ -474,6 +474,14 @@ def init_db():
         cursor.execute('''ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS senha_hash TEXT''')
         cursor.execute('''ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS primeiro_acesso BOOLEAN DEFAULT TRUE''')
         cursor.execute('''ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS area TEXT DEFAULT 'Ambos' ''')
+        # 🆕 Presença real (Administração de Colaboradores pedia pra saber
+        # quem está DE VERDADE dentro do app agora, não só quem tem a
+        # conta habilitada) — o front manda um "sinal de vida" periódico
+        # (POST /api/colaboradores/heartbeat) enquanto o app está aberto
+        # e logado; login também atualiza este campo. "Online" é
+        # calculado no front comparando isso com agora (ver
+        # ONLINE_JANELA_SEGUNDOS em routers/colaboradores.py).
+        cursor.execute('''ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS ultimo_acesso TEXT''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS materiais (
@@ -1728,6 +1736,9 @@ class ColaboradorAlternarAtivo(BaseModel):
     ativo: bool
 
 class ColaboradorResetarSenha(BaseModel):
+    matricula: str
+
+class ColaboradorHeartbeat(BaseModel):
     matricula: str
 
 class MaterialCadastro(BaseModel):

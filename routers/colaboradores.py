@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app_core import (
     ColaboradorAlternarAtivo,
+    ColaboradorHeartbeat,
     ColaboradorMudarCargo,
     ColaboradorResetarSenha,
     DefinirSenhaColaborador,
     LoginColaborador,
     MATRICULAS_ADM,
     _buscar_area_colaborador,
+    agora_brasil,
     bcrypt,
     exigir_admin,
     gerar_token,
@@ -63,6 +65,15 @@ def login_colaborador(dados: LoginColaborador):
 
         if not colaborador["senha_hash"] or not bcrypt.checkpw(dados.senha.encode(), colaborador["senha_hash"].encode()):
             raise HTTPException(status_code=401, detail="Senha incorreta.")
+
+        # 🆕 Marca presença já no login — o front também manda heartbeat
+        # periódico depois disso pra manter "Online" enquanto o app fica
+        # aberto (ver /api/colaboradores/heartbeat, mais abaixo).
+        cursor.execute(
+            "UPDATE colaboradores SET ultimo_acesso = %s WHERE matricula = %s",
+            (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), matricula)
+        )
+        conn.commit()
 
         return {
             "sucesso": True,
@@ -130,9 +141,29 @@ def get_colaboradores_todos():
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT matricula, nome, cargo, ativo, primeiro_acesso FROM colaboradores ORDER BY ativo DESC, nome"
+            "SELECT matricula, nome, cargo, ativo, primeiro_acesso, ultimo_acesso FROM colaboradores ORDER BY ativo DESC, nome"
         )
         return cursor.fetchall()
+
+
+
+
+@router.post("/api/colaboradores/heartbeat", tags=["Colaboradores"], summary="Sinal de vida — mantém o colaborador \"Online\" na Administração")
+def heartbeat_colaborador(dados: ColaboradorHeartbeat):
+    """Chamado pelo front a cada ~60s enquanto alguém está logado e com
+    o app aberto (ver window.iniciarHeartbeatColaborador em script.js).
+    Não exige admin — é o próprio colaborador reportando presença."""
+    matricula = dados.matricula.strip().upper()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE colaboradores SET ultimo_acesso = %s WHERE matricula = %s",
+            (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), matricula)
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
+        conn.commit()
+    return {"sucesso": True}
 
 
 
