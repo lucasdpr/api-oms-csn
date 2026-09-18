@@ -12,6 +12,12 @@ from app_core import (
 router = APIRouter()
 
 
+# 🆕 MCCs monitoradas no card "Sistema Online" do painel — enquanto
+# existir uma OS "Em Andamento" com esse valor em `maquina`, a máquina
+# aparece como "Manutenção" em vez de "Operação Normal".
+MAQUINAS_MONITORADAS = ["MCC 2", "MCC 3", "MCC 4"]
+
+
 
 
 # ==========================================
@@ -69,11 +75,11 @@ def criar_ordem_servico(dados: OrdemServicoCriar):
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO ordens_servico (numero_os, descricao, status, criado_por, criado_em, area)
-            VALUES (%s, %s, 'Em Andamento', %s, %s, %s)
+            INSERT INTO ordens_servico (numero_os, descricao, status, criado_por, criado_em, area, maquina)
+            VALUES (%s, %s, 'Em Andamento', %s, %s, %s, %s)
             RETURNING id
             """,
-            (dados.numero_os, dados.descricao, dados.operador, agora, dados.area)
+            (dados.numero_os, dados.descricao, dados.operador, agora, dados.area, dados.maquina)
         )
         os_id = cursor.fetchone()["id"]
 
@@ -152,6 +158,25 @@ def mudar_status_ordem_servico(dados: OrdemServicoStatus):
     return {"sucesso": True}
 
 
+
+
+@router.get("/api/maquinas/status", tags=["Ordens de Serviço (OS)"], summary="Status das máquinas (Operação Normal / Manutenção)")
+def status_maquinas():
+    """Deriva o status de cada MCC a partir das OS abertas: se existe
+    alguma OS "Em Andamento" com `maquina` igual à MCC, ela está
+    lingotando parada (Manutenção); senão, Operação Normal."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT maquina FROM ordens_servico WHERE status = 'Em Andamento' AND maquina = ANY(%s)",
+            (MAQUINAS_MONITORADAS,)
+        )
+        maquinas_em_manutencao = {row["maquina"] for row in cursor.fetchall()}
+
+    return [
+        {"maquina": maquina, "status": "Manutenção" if maquina in maquinas_em_manutencao else "Operação Normal"}
+        for maquina in MAQUINAS_MONITORADAS
+    ]
 
 
 @router.post("/api/ordens_servico/excluir", tags=["Ordens de Serviço (OS)"], summary="Excluir uma Ordem de Serviço")

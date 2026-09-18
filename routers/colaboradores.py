@@ -1,12 +1,19 @@
+import time
+
 from fastapi import APIRouter, Depends, HTTPException
 from app_core import (
     ColaboradorAlternarAtivo,
+    ColaboradorCriar,
+    ColaboradorEditar,
+    ColaboradorForcarLogout,
+    ColaboradorHeartbeat,
     ColaboradorMudarCargo,
     ColaboradorResetarSenha,
     DefinirSenhaColaborador,
     LoginColaborador,
     MATRICULAS_ADM,
     _buscar_area_colaborador,
+    agora_brasil,
     bcrypt,
     exigir_admin,
     gerar_token,
@@ -14,6 +21,25 @@ from app_core import (
 )
 
 router = APIRouter()
+
+
+# 🆕 Auditoria das ações admin sobre colaboradores (pedido do usuário:
+# "quem me bloqueou e por quê" não tinha resposta nenhuma até aqui).
+# Reaproveita 100% a infraestrutura de log_eventos que já existe pro
+# Prontuário das peças — peca_id vira a MATRÍCULA do colaborador
+# afetado, então GET /api/historico_eventos?peca_id=<matricula> já
+# devolve pronto o "evento de cada funcionário separado" que o usuário
+# pediu, sem precisar de tabela nova. Insert direto (sem passar pela
+# rota /api/registrar_evento) pra não disparar push com o título
+# "Registro no equipamento", que não faz sentido pra uma ação admin.
+def _registrar_evento_colaborador(cursor, matricula_alvo, acao, admin_matricula):
+    cursor.execute("SELECT nome FROM colaboradores WHERE matricula = %s", (admin_matricula,))
+    row = cursor.fetchone()
+    operador = f"{row['nome']} (ADM)" if row else admin_matricula
+    cursor.execute(
+        "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, categoria) VALUES (%s, %s, %s, %s, %s)",
+        (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), operador, matricula_alvo, acao, "Colaboradores")
+    )
 
 
 
@@ -63,6 +89,15 @@ def login_colaborador(dados: LoginColaborador):
 
         if not colaborador["senha_hash"] or not bcrypt.checkpw(dados.senha.encode(), colaborador["senha_hash"].encode()):
             raise HTTPException(status_code=401, detail="Senha incorreta.")
+
+        # 🆕 Marca presença já no login — o front também manda heartbeat
+        # periódico depois disso pra manter "Online" enquanto o app fica
+        # aberto (ver /api/colaboradores/heartbeat, mais abaixo).
+        cursor.execute(
+            "UPDATE colaboradores SET ultimo_acesso = %s WHERE matricula = %s",
+            (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), matricula)
+        )
+        conn.commit()
 
         return {
             "sucesso": True,
@@ -130,15 +165,35 @@ def get_colaboradores_todos():
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT matricula, nome, cargo, ativo, primeiro_acesso FROM colaboradores ORDER BY ativo DESC, nome"
+            "SELECT matricula, nome, cargo, ativo, primeiro_acesso, ultimo_acesso, area FROM colaboradores ORDER BY ativo DESC, nome"
         )
         return cursor.fetchall()
 
 
 
 
+@router.post("/api/colaboradores/heartbeat", tags=["Colaboradores"], summary="Sinal de vida — mantém o colaborador \"Online\" na Administração")
+def heartbeat_colaborador(dados: ColaboradorHeartbeat):
+    """Chamado pelo front a cada ~60s enquanto alguém está logado e com
+    o app aberto (ver window.iniciarHeartbeatColaborador em script.js).
+    Não exige admin — é o próprio colaborador reportando presença."""
+    matricula = dados.matricula.strip().upper()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE colaboradores SET ultimo_acesso = %s WHERE matricula = %s",
+            (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), matricula)
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
+        conn.commit()
+    return {"sucesso": True}
+
+
+
+
 @router.post("/api/colaboradores/mudar_cargo", tags=["Colaboradores"], summary="Trocar o cargo de um colaborador")
-def mudar_cargo_colaborador(dados: ColaboradorMudarCargo, _admin: str = Depends(exigir_admin)):
+def mudar_cargo_colaborador(dados: ColaboradorMudarCargo, admin: str = Depends(exigir_admin)):
     matricula = dados.matricula.strip().upper()
     cargo = dados.cargo.strip()
     if not cargo:
@@ -146,9 +201,13 @@ def mudar_cargo_colaborador(dados: ColaboradorMudarCargo, _admin: str = Depends(
 
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE colaboradores SET cargo = %s WHERE matricula = %s", (cargo, matricula))
-        if cursor.rowcount == 0:
+        cursor.execute("SELECT cargo FROM colaboradores WHERE matricula = %s", (matricula,))
+        atual = cursor.fetchone()
+        if not atual:
             raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
+
+        cursor.execute("UPDATE colaboradores SET cargo = %s WHERE matricula = %s", (cargo, matricula))
+        _registrar_evento_colaborador(cursor, matricula, f"🆔 Cargo alterado de \"{atual['cargo'] or '-'}\" para \"{cargo}\".", admin)
         conn.commit()
 
     return {"sucesso": True}
@@ -157,14 +216,33 @@ def mudar_cargo_colaborador(dados: ColaboradorMudarCargo, _admin: str = Depends(
 
 
 @router.post("/api/colaboradores/alternar_ativo", tags=["Colaboradores"], summary="Ativar ou desativar acesso de um colaborador")
-def alternar_ativo_colaborador(dados: ColaboradorAlternarAtivo, _admin: str = Depends(exigir_admin)):
+def alternar_ativo_colaborador(dados: ColaboradorAlternarAtivo, admin: str = Depends(exigir_admin)):
     matricula = dados.matricula.strip().upper()
+
+    # 🆕 Motivo obrigatório só ao BLOQUEAR — reativar não precisa
+    # (pedido do usuário: "daqui 3 meses ninguém lembra por que fulano
+    # foi bloqueado" sem isso registrado).
+    if not dados.ativo and not (dados.motivo and dados.motivo.strip()):
+        raise HTTPException(status_code=400, detail="Informe o motivo do bloqueio.")
 
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE colaboradores SET ativo = %s WHERE matricula = %s", (dados.ativo, matricula))
+        if not dados.ativo:
+            # 🆕 Bloquear já derruba a sessão ativa na hora (antes o
+            # token continuava valendo até expirar sozinho, até 12h —
+            # ver validar_token em app_core.py). Reativar NÃO faz o
+            # inverso de propósito: a pessoa loga de novo normalmente.
+            cursor.execute(
+                "UPDATE colaboradores SET ativo = %s, sessao_invalidada_em = %s WHERE matricula = %s",
+                (dados.ativo, str(int(time.time())), matricula)
+            )
+        else:
+            cursor.execute("UPDATE colaboradores SET ativo = %s WHERE matricula = %s", (dados.ativo, matricula))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
+
+        acao = f"🔴 Acesso bloqueado (sessão encerrada na hora). Motivo: {dados.motivo.strip()}" if not dados.ativo else "🟢 Acesso reativado."
+        _registrar_evento_colaborador(cursor, matricula, acao, admin)
         conn.commit()
 
     return {"sucesso": True, "ativo": dados.ativo}
@@ -172,8 +250,33 @@ def alternar_ativo_colaborador(dados: ColaboradorAlternarAtivo, _admin: str = De
 
 
 
+@router.post("/api/colaboradores/forcar_logout", tags=["Colaboradores"], summary="Forçar logout remoto (sem bloquear a conta)")
+def forcar_logout_colaborador(dados: ColaboradorForcarLogout, admin: str = Depends(exigir_admin)):
+    """Derruba qualquer sessão ativa dessa matrícula na hora, sem
+    bloquear a conta — útil pra token suspeito de vazado, celular
+    perdido/roubado, ou trocou de dispositivo e quer garantir que o
+    antigo caiu. A pessoa consegue logar de novo imediatamente depois."""
+    matricula = dados.matricula.strip().upper()
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE colaboradores SET sessao_invalidada_em = %s WHERE matricula = %s",
+            (str(int(time.time())), matricula)
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
+
+        _registrar_evento_colaborador(cursor, matricula, "🚪 Logout forçado remotamente pelo administrador (conta continua habilitada).", admin)
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+
+
 @router.post("/api/colaboradores/resetar_senha", tags=["Colaboradores"], summary="Resetar senha de um colaborador")
-def resetar_senha_colaborador(dados: ColaboradorResetarSenha, _admin: str = Depends(exigir_admin)):
+def resetar_senha_colaborador(dados: ColaboradorResetarSenha, admin: str = Depends(exigir_admin)):
     """Zera a senha do colaborador e marca como 'primeiro acesso' de
     novo — a senha temporária volta a ser a própria matrícula, igual
     faz o resetar_colaboradores.py no terminal, mas só pra UMA pessoa
@@ -188,6 +291,69 @@ def resetar_senha_colaborador(dados: ColaboradorResetarSenha, _admin: str = Depe
         )
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
+
+        _registrar_evento_colaborador(cursor, matricula, "🔑 Senha resetada pelo administrador (volta a ser a própria matrícula).", admin)
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+
+
+@router.post("/api/colaboradores/criar", tags=["Colaboradores"], summary="Cadastrar novo colaborador")
+def criar_colaborador(dados: ColaboradorCriar, admin: str = Depends(exigir_admin)):
+    """Antes só dava pra dar acesso a alguém novo rodando script no
+    servidor (importar_colaboradores.py) — maior buraco de "controle
+    real" da tela de Administração. Nasce com a senha padrão (a própria
+    matrícula) e primeiro_acesso=TRUE, igual todo colaborador novo."""
+    matricula = dados.matricula.strip().upper()
+    nome = dados.nome.strip()
+    if not matricula or not nome:
+        raise HTTPException(status_code=400, detail="Matrícula e nome são obrigatórios.")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT matricula FROM colaboradores WHERE matricula = %s", (matricula,))
+        if cursor.fetchone():
+            raise HTTPException(status_code=409, detail="Já existe um colaborador com essa matrícula.")
+
+        cursor.execute(
+            "INSERT INTO colaboradores (matricula, nome, cargo, area, ativo, primeiro_acesso) VALUES (%s, %s, %s, %s, TRUE, TRUE)",
+            (matricula, nome, (dados.cargo or "Colaborador").strip(), dados.area or "Ambos")
+        )
+        _registrar_evento_colaborador(cursor, matricula, f"🆕 Colaborador cadastrado (cargo: {dados.cargo or 'Colaborador'}).", admin)
+        conn.commit()
+
+    return {"sucesso": True}
+
+
+
+
+@router.post("/api/colaboradores/editar", tags=["Colaboradores"], summary="Editar nome/área de um colaborador")
+def editar_colaborador(dados: ColaboradorEditar, admin: str = Depends(exigir_admin)):
+    matricula = dados.matricula.strip().upper()
+    campos, valores, mudancas = [], [], []
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT nome, area FROM colaboradores WHERE matricula = %s", (matricula,))
+        atual = cursor.fetchone()
+        if not atual:
+            raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
+
+        if dados.nome is not None and dados.nome.strip() and dados.nome.strip() != atual["nome"]:
+            campos.append("nome = %s"); valores.append(dados.nome.strip())
+            mudancas.append(f"nome: \"{atual['nome']}\" → \"{dados.nome.strip()}\"")
+        if dados.area is not None and dados.area != atual["area"]:
+            campos.append("area = %s"); valores.append(dados.area)
+            mudancas.append(f"área: \"{atual['area'] or '-'}\" → \"{dados.area or '-'}\"")
+
+        if not campos:
+            return {"sucesso": True}  # nada mudou, não é erro
+
+        valores.append(matricula)
+        cursor.execute(f"UPDATE colaboradores SET {', '.join(campos)} WHERE matricula = %s", valores)
+        _registrar_evento_colaborador(cursor, matricula, f"✏️ Dados editados — {'; '.join(mudancas)}.", admin)
         conn.commit()
 
     return {"sucesso": True}
