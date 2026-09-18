@@ -112,13 +112,32 @@ def get_mensagens_area_resumo_tecnicos(area: str):
         return linhas
 
 
-@router.get("/api/mensagens_area/nao_lidas", tags=["Mensagens Área-ADM"], summary="Quantidade de mensagens do ADM não lidas por uma área")
+@router.get("/api/mensagens_area/nao_lidas", tags=["Mensagens Área-ADM"], summary="Quantidade de mensagens não lidas de uma área (ADM->área + área<->área)")
 def get_mensagens_area_nao_lidas(area: str):
+    """🔧 CORREÇÃO ("mandei mensagem no Entre Técnicos e não chegou nem
+    notificação pro outro lado"): esta rota só contava não lidas do
+    canal 'supervisao' (ADM -> área) — o canal 'tecnicos' (área<->área)
+    nunca somava aqui, e é ESTE número que window.atualizarBadgeChatAreaAdm
+    usa pro badge do nav "Chats" e da Central de Áreas de quem não é
+    ADM. Resultado: mesmo com a mensagem gravada certinho no banco (área
+    de origem/destino corretos), quem recebia não tinha NENHUM sinal
+    visual persistente — só o push, que falha em qualquer teste sem
+    notificação já autorizada no navegador. Agora soma as duas coisas:
+    supervisao (ADM -> esta área) + tecnicos (mensagem que a OUTRA área
+    mandou pra esta, ainda não lida)."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT COUNT(*) AS qtd FROM mensagens_area_adm WHERE area = %s AND de_adm = TRUE AND lida = FALSE",
-            (area,)
+            """
+            SELECT
+                (SELECT COUNT(*) FROM mensagens_area_adm
+                 WHERE area = %s AND canal = 'supervisao' AND de_adm = TRUE AND lida = FALSE)
+                +
+                (SELECT COUNT(*) FROM mensagens_area_adm
+                 WHERE canal = 'tecnicos' AND area_destino = %s AND area != %s AND lida = FALSE)
+                AS qtd
+            """,
+            (area, area, area)
         )
         return {"nao_lidas": cursor.fetchone()["qtd"]}
 
