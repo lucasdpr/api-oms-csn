@@ -1734,12 +1734,24 @@ class ColaboradorMudarCargo(BaseModel):
 class ColaboradorAlternarAtivo(BaseModel):
     matricula: str
     ativo: bool
+    motivo: Optional[str] = None  # 🆕 obrigatório só ao BLOQUEAR (ativo=False) — ver rota
 
 class ColaboradorResetarSenha(BaseModel):
     matricula: str
 
 class ColaboradorHeartbeat(BaseModel):
     matricula: str
+
+class ColaboradorCriar(BaseModel):
+    matricula: str
+    nome: str
+    cargo: Optional[str] = "Colaborador"
+    area: Optional[str] = "Ambos"
+
+class ColaboradorEditar(BaseModel):
+    matricula: str
+    nome: Optional[str] = None
+    area: Optional[str] = None
 
 class MaterialCadastro(BaseModel):
     codigo: str
