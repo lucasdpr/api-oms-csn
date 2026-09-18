@@ -26,10 +26,15 @@ MAQUINAS_MONITORADAS = ["MCC 2", "MCC 3", "MCC 4"]
 # Andamento / Concluído).
 # ==========================================
 @router.get("/api/ordens_servico", tags=["Ordens de Serviço (OS)"], summary="Listar Ordens de Serviço")
-def listar_ordens_servico(status: Optional[str] = None, limite: int = 100):
+def listar_ordens_servico(status: Optional[str] = None, area: Optional[str] = None, limite: int = 100):
     """Lista as OS com uma foto de "capa" (a primeira cadastrada) e o
     total de fotos — pra montar o card na lista sem precisar buscar
-    TODAS as fotos de TODAS as OS de uma vez (isso ficaria pesado)."""
+    TODAS as fotos de TODAS as OS de uma vez (isso ficaria pesado).
+    🆕 `area`: filtra OS que tenham essa área entre as `areas` marcadas
+    — usado pelo quadro de trabalho de cada área (ver
+    renderizarAtividadesArea no front), que mescla essas OS junto com
+    as atividades normais da área, sem duplicar a OS na Oficina
+    genérica."""
     with get_db() as conn:
         cursor = conn.cursor()
         query = """
@@ -39,12 +44,18 @@ def listar_ordens_servico(status: Optional[str] = None, limite: int = 100):
                 (SELECT COUNT(*) FROM os_fotos f WHERE f.os_id = o.id) AS total_fotos
             FROM ordens_servico o
         """
+        condicoes, parametros = [], []
         if status:
-            query += " WHERE o.status = %s ORDER BY o.id DESC LIMIT %s"
-            cursor.execute(query, (status, limite))
-        else:
-            query += " ORDER BY o.id DESC LIMIT %s"
-            cursor.execute(query, (limite,))
+            condicoes.append("o.status = %s")
+            parametros.append(status)
+        if area:
+            condicoes.append("%s = ANY(o.areas)")
+            parametros.append(area)
+        if condicoes:
+            query += " WHERE " + " AND ".join(condicoes)
+        query += " ORDER BY o.id DESC LIMIT %s"
+        parametros.append(limite)
+        cursor.execute(query, tuple(parametros))
         return cursor.fetchall()
 
 
@@ -75,11 +86,11 @@ def criar_ordem_servico(dados: OrdemServicoCriar):
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO ordens_servico (numero_os, descricao, status, criado_por, criado_em, area, maquina)
-            VALUES (%s, %s, 'Em Andamento', %s, %s, %s, %s)
+            INSERT INTO ordens_servico (numero_os, descricao, status, criado_por, criado_em, area, maquina, areas)
+            VALUES (%s, %s, 'Em Andamento', %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (dados.numero_os, dados.descricao, dados.operador, agora, dados.area, dados.maquina)
+            (dados.numero_os, dados.descricao, dados.operador, agora, dados.area, dados.maquina, dados.areas or None)
         )
         os_id = cursor.fetchone()["id"]
 
