@@ -162,7 +162,7 @@ def get_colaboradores_todos():
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT matricula, nome, cargo, ativo, primeiro_acesso, ultimo_acesso FROM colaboradores ORDER BY ativo DESC, nome"
+            "SELECT matricula, nome, cargo, ativo, primeiro_acesso, ultimo_acesso, area FROM colaboradores ORDER BY ativo DESC, nome"
         )
         return cursor.fetchall()
 
