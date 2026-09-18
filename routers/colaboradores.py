@@ -1,8 +1,11 @@
+import time
+
 from fastapi import APIRouter, Depends, HTTPException
 from app_core import (
     ColaboradorAlternarAtivo,
     ColaboradorCriar,
     ColaboradorEditar,
+    ColaboradorForcarLogout,
     ColaboradorHeartbeat,
     ColaboradorMudarCargo,
     ColaboradorResetarSenha,
@@ -224,15 +227,50 @@ def alternar_ativo_colaborador(dados: ColaboradorAlternarAtivo, admin: str = Dep
 
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE colaboradores SET ativo = %s WHERE matricula = %s", (dados.ativo, matricula))
+        if not dados.ativo:
+            # 🆕 Bloquear já derruba a sessão ativa na hora (antes o
+            # token continuava valendo até expirar sozinho, até 12h —
+            # ver validar_token em app_core.py). Reativar NÃO faz o
+            # inverso de propósito: a pessoa loga de novo normalmente.
+            cursor.execute(
+                "UPDATE colaboradores SET ativo = %s, sessao_invalidada_em = %s WHERE matricula = %s",
+                (dados.ativo, str(int(time.time())), matricula)
+            )
+        else:
+            cursor.execute("UPDATE colaboradores SET ativo = %s WHERE matricula = %s", (dados.ativo, matricula))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
 
-        acao = f"🔴 Acesso bloqueado. Motivo: {dados.motivo.strip()}" if not dados.ativo else "🟢 Acesso reativado."
+        acao = f"🔴 Acesso bloqueado (sessão encerrada na hora). Motivo: {dados.motivo.strip()}" if not dados.ativo else "🟢 Acesso reativado."
         _registrar_evento_colaborador(cursor, matricula, acao, admin)
         conn.commit()
 
     return {"sucesso": True, "ativo": dados.ativo}
+
+
+
+
+@router.post("/api/colaboradores/forcar_logout", tags=["Colaboradores"], summary="Forçar logout remoto (sem bloquear a conta)")
+def forcar_logout_colaborador(dados: ColaboradorForcarLogout, admin: str = Depends(exigir_admin)):
+    """Derruba qualquer sessão ativa dessa matrícula na hora, sem
+    bloquear a conta — útil pra token suspeito de vazado, celular
+    perdido/roubado, ou trocou de dispositivo e quer garantir que o
+    antigo caiu. A pessoa consegue logar de novo imediatamente depois."""
+    matricula = dados.matricula.strip().upper()
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE colaboradores SET sessao_invalidada_em = %s WHERE matricula = %s",
+            (str(int(time.time())), matricula)
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
+
+        _registrar_evento_colaborador(cursor, matricula, "🚪 Logout forçado remotamente pelo administrador (conta continua habilitada).", admin)
+        conn.commit()
+
+    return {"sucesso": True}
 
 
 

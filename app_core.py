@@ -482,6 +482,14 @@ def init_db():
         # calculado no front comparando isso com agora (ver
         # ONLINE_JANELA_SEGUNDOS em routers/colaboradores.py).
         cursor.execute('''ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS ultimo_acesso TEXT''')
+        # 🆕 Forçar logout remoto (ver forcar_logout_colaborador em
+        # routers/colaboradores.py e validar_token acima) — guarda o
+        # timestamp (epoch, texto) do último "forçar logout"; qualquer
+        # token emitido ANTES disso passa a ser recusado, mesmo sem ter
+        # expirado ainda. Bloquear o acesso (alternar_ativo com
+        # ativo=False) também seta isto junto, pra derrubar a sessão na
+        # hora em vez de só impedir o PRÓXIMO login.
+        cursor.execute('''ALTER TABLE colaboradores ADD COLUMN IF NOT EXISTS sessao_invalidada_em TEXT''')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS materiais (
@@ -1742,6 +1750,9 @@ class ColaboradorResetarSenha(BaseModel):
 class ColaboradorHeartbeat(BaseModel):
     matricula: str
 
+class ColaboradorForcarLogout(BaseModel):
+    matricula: str
+
 class ColaboradorCriar(BaseModel):
     matricula: str
     nome: str
@@ -2260,30 +2271,57 @@ TOKEN_VALIDADE_SEGUNDOS = 12 * 60 * 60  # 12h — precisa logar de novo depois d
 
 
 def gerar_token(matricula: str) -> str:
-    """Token = matricula.expira, assinado com HMAC-SHA256. Tudo em
-    base64url pra viajar de boa num header Authorization."""
-    expira_em = int(time_lib.time()) + TOKEN_VALIDADE_SEGUNDOS
-    payload = f"{matricula}.{expira_em}"
+    """Token = matricula.emitido_em.expira, assinado com HMAC-SHA256.
+    Tudo em base64url pra viajar de boa num header Authorization.
+    🆕 "emitido_em" (além do "expira" que já existia) é o que permite
+    forçar logout remoto (ver forcar_logout_colaborador, em
+    routers/colaboradores.py): revogar não apaga o token — ele é
+    stateless, ninguém consegue "apagar" o que já foi emitido — só
+    marca no banco "qualquer token emitido ANTES de agora não vale
+    mais", e validar_token (abaixo) passa a recusar todo token cujo
+    emitido_em seja mais antigo que essa marca."""
+    agora = int(time_lib.time())
+    expira_em = agora + TOKEN_VALIDADE_SEGUNDOS
+    payload = f"{matricula}.{agora}.{expira_em}"
     assinatura = hmac.new(SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
     bruto = f"{payload}.{assinatura}"
     return base64.urlsafe_b64encode(bruto.encode()).decode()
 
 
 def validar_token(token: str) -> Optional[str]:
-    """Devolve a matrícula se o token for válido e não tiver expirado; None caso contrário.
-    Usada pela dependency exigir_login() (rota por rota) E pelo
-    middleware global ExigirLoginEmEscritasMiddleware (main.py) — uma
-    fonte só pra validar token, os dois lugares só decidem QUANDO
-    exigir ele."""
+    """Devolve a matrícula se o token for válido, não tiver expirado E
+    não tiver sido emitido antes de um "forçar logout" pra essa
+    matrícula; None caso contrário. Usada pela dependency exigir_login()
+    (rota por rota) E pelo middleware global
+    ExigirLoginEmEscritasMiddleware (main.py) — uma fonte só pra validar
+    token, os dois lugares só decidem QUANDO exigir ele.
+    🔧 Antes só conferia assinatura/expiração (sem tocar o banco) — mais
+    rápido, mas um colaborador BLOQUEADO ou com "logout forçado" continuava
+    autenticado até o token expirar sozinho (até 12h depois). Agora
+    consulta o banco (via pool de conexões — psycopg2_pool, sem custo de
+    handshake novo por request) pra fechar essa janela na hora."""
     try:
         bruto = base64.urlsafe_b64decode(token.encode()).decode()
-        matricula, expira_em_str, assinatura = bruto.rsplit(".", 2)
-        payload = f"{matricula}.{expira_em_str}"
+        matricula, emitido_em_str, expira_em_str, assinatura = bruto.rsplit(".", 3)
+        payload = f"{matricula}.{emitido_em_str}.{expira_em_str}"
         assinatura_esperada = hmac.new(SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(assinatura, assinatura_esperada):
             return None
         if int(expira_em_str) < int(time_lib.time()):
             return None
+
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT ativo, sessao_invalidada_em FROM colaboradores WHERE matricula = %s",
+                (matricula,)
+            )
+            colaborador = cursor.fetchone()
+        if not colaborador or not colaborador["ativo"]:
+            return None
+        if colaborador["sessao_invalidada_em"] and int(emitido_em_str) <= int(colaborador["sessao_invalidada_em"]):
+            return None
+
         return matricula
     except Exception:
         return None
