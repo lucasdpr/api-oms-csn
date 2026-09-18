@@ -1,8 +1,11 @@
+import time
+
 from fastapi import APIRouter, HTTPException
 from typing import Optional
 from app_core import (
     MensagemAreaAdmEnviar,
     MensagemAreaAdmMarcarLida,
+    MensagemAreaAdmDigitando,
     AREA_OFICINA_NOMES,
     agora_brasil,
     enviar_push_para_area,
@@ -10,6 +13,19 @@ from app_core import (
 )
 
 router = APIRouter()
+
+# 🆕 "Está digitando..." no canal Entre Técnicos (área<->área) — pedido
+# do usuário, igual WhatsApp. É estado EFÊMERO (só importa por poucos
+# segundos), por isso fica em memória do processo, não no banco — não
+# faz sentido gastar linha de tabela/gravação persistente pra isso.
+# Chave: (area_de_quem_digita, area_destino). Valor: timestamp (epoch)
+# do último "ping" de digitação. Uma entrada mais velha que
+# DIGITANDO_TTL_SEGUNDOS é tratada como "parou de digitar".
+# ⚠️ Só funciona certo com 1 worker/processo (Render free tier já roda
+# assim) — com múltiplos workers cada um teria sua própria cópia deste
+# dicionário, e o ping podia cair num worker diferente da consulta.
+_DIGITANDO: dict[tuple[str, str], float] = {}
+DIGITANDO_TTL_SEGUNDOS = 4
 
 # ==========================================================================
 # CHAT ÁREA <-> ADM — pedido do usuário: "as áreas podem enviar mensagem
@@ -110,6 +126,23 @@ def get_mensagens_area_resumo_tecnicos(area: str):
         for linha in linhas:
             linha["nome_area"] = AREA_OFICINA_NOMES.get(linha["outra_area"], linha["outra_area"])
         return linhas
+
+
+@router.post("/api/mensagens_area/digitando", tags=["Mensagens Área-ADM"], summary="Avisa que está digitando no canal Entre Técnicos (efêmero, sem gravar no banco)")
+def marcar_digitando(dados: MensagemAreaAdmDigitando):
+    _DIGITANDO[(dados.area, dados.area_destino)] = time.time()
+    return {"sucesso": True}
+
+
+@router.get("/api/mensagens_area/digitando", tags=["Mensagens Área-ADM"], summary="Verifica se a OUTRA área está digitando pra mim agora")
+def get_digitando(area: str, area_destino: str):
+    """`area` = minha área (quem pergunta), `area_destino` = a área do
+    outro lado da conversa — mesma convenção usada no resto deste
+    arquivo. Retorna True só se o PING mais recente do outro lado pra
+    mim ainda está dentro da janela (DIGITANDO_TTL_SEGUNDOS)."""
+    ultimo_ping = _DIGITANDO.get((area_destino, area))
+    digitando = bool(ultimo_ping and (time.time() - ultimo_ping) <= DIGITANDO_TTL_SEGUNDOS)
+    return {"digitando": digitando}
 
 
 @router.get("/api/mensagens_area/nao_lidas", tags=["Mensagens Área-ADM"], summary="Quantidade de mensagens não lidas de uma área (ADM->área + área<->área)")
