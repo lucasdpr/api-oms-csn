@@ -78,6 +78,18 @@ def get_fotos_ordem_servico(os_id: int):
 
 @router.post("/api/ordens_servico", tags=["Ordens de Serviço (OS)"], summary="Registrar nova Ordem de Serviço")
 def criar_ordem_servico(dados: OrdemServicoCriar):
+    # 🔧 CORREÇÃO (pedido do usuário: "tire o opcional de tudo pq todos
+    # os campos são obrigatório") — antes só a foto era exigida aqui; o
+    # front já valida isso tudo antes de mandar, mas nunca dá pra
+    # confiar só na validação do cliente.
+    if not (dados.numero_os or "").strip():
+        raise HTTPException(status_code=400, detail="Informe o número da OS.")
+    if not (dados.maquina or "").strip():
+        raise HTTPException(status_code=400, detail="Selecione a máquina afetada.")
+    if not (dados.descricao or "").strip():
+        raise HTTPException(status_code=400, detail="Informe a descrição.")
+    if not dados.areas:
+        raise HTTPException(status_code=400, detail="Selecione pelo menos uma área envolvida.")
     if not dados.fotos_base64:
         raise HTTPException(status_code=400, detail="É preciso pelo menos 1 foto da OS.")
 
