@@ -51,10 +51,31 @@ def criar_laudo(dados: LaudoCriar):
     agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO laudos (peca_id, tipo, html, criado_por, criado_em) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (dados.peca_id, dados.tipo, dados.html, dados.operador, agora)
-        )
+        # 🔧 CORREÇÃO: com execucao_id, faz UPSERT (ver índice único
+        # laudos_execucao_id_unica) — clicar "Salvar" várias vezes durante
+        # o mesmo reparo atualiza a mesma linha em vez de acumular uma
+        # nova a cada clique. Sem execucao_id (chamadores antigos, ex:
+        # Checklist de Qualidade de Saída), mantém o INSERT de sempre.
+        if dados.execucao_id is not None:
+            cursor.execute(
+                """
+                INSERT INTO laudos (peca_id, tipo, html, criado_por, criado_em, execucao_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (execucao_id) DO UPDATE SET
+                    peca_id = EXCLUDED.peca_id,
+                    tipo = EXCLUDED.tipo,
+                    html = EXCLUDED.html,
+                    criado_por = EXCLUDED.criado_por,
+                    criado_em = EXCLUDED.criado_em
+                RETURNING id
+                """,
+                (dados.peca_id, dados.tipo, dados.html, dados.operador, agora, dados.execucao_id)
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO laudos (peca_id, tipo, html, criado_por, criado_em) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (dados.peca_id, dados.tipo, dados.html, dados.operador, agora)
+            )
         laudo_id = cursor.fetchone()["id"]
         conn.commit()
 
