@@ -176,11 +176,26 @@ def atualizar_peca(peca: PecaUpdate):
 def excluir_peca(peca: PecaExcluir):
     with get_db() as conn:
         cursor = conn.cursor()
+        # 🆕 achado de auditoria: excluir uma peça/equipamento apagava a
+        # linha de vez, sem nenhum rastro de quem excluiu — grava um
+        # resumo em log_eventos ANTES do DELETE (depois não sobra dado
+        # nenhum pra descrever).
+        cursor.execute("SELECT tipo, local, status FROM equipamentos WHERE id = %s", (peca.id,))
+        peca_alvo = cursor.fetchone()
+
         cursor.execute("DELETE FROM equipamentos WHERE id = %s", (peca.id,))
         if cursor.rowcount == 0:
             conn.rollback()
             raise HTTPException(status_code=404, detail=f"Peça '{peca.id}' não encontrada.")
         cursor.execute("DELETE FROM folhoes_rascunho WHERE equipamento_id = %s", (peca.id,))
+
+        operador = peca.operador or "Sistema"
+        cursor.execute(
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
+            (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), operador, peca.id,
+             f"Excluiu a peça/equipamento [{peca.id}] (tipo: {peca_alvo['tipo'] if peca_alvo else '?'}, estava em: {peca_alvo['local'] if peca_alvo else '?'})",
+             "pecas")
+        )
         conn.commit()
 
     return {"sucesso": True}

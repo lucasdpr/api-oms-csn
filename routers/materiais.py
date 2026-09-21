@@ -3,6 +3,7 @@ from app_core import (
     MaterialAjuste,
     MaterialCadastro,
     MaterialRemover,
+    agora_brasil,
     enviar_push_para_area,
     get_db,
 )
@@ -50,6 +51,19 @@ def cadastrar_material(dados: MaterialCadastro):
 
         cursor.execute("SELECT codigo, descricao, qtd, local, valor_unit FROM materiais WHERE codigo = %s", (codigo,))
         atualizado = cursor.fetchone()
+
+        # 🔧 CORREÇÃO (achado de auditoria: "Estoque Geral é o único
+        # módulo sem NENHUM registro de quem mexeu"): grava na mesma
+        # transação, igual rolos.py/hidraulica.py já fazem — antes,
+        # a única rastreabilidade vinha de uma segunda chamada separada
+        # do front-end, que podia falhar sem deixar rastro nenhum.
+        agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
+        operador = dados.operador or "Sistema"
+        acao = f"{'Reabasteceu' if ja_existia else 'Cadastrou'} material [{codigo}] — {descricao} (qtd: {dados.qtd:g}, saldo atual: {atualizado['qtd']:g})"
+        cursor.execute(
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
+            (agora, operador, "ESTOQUE-MATERIAIS", acao, "materiais")
+        )
         conn.commit()
 
     return {"sucesso": True, "ja_existia": ja_existia, "material": atualizado}
@@ -80,6 +94,15 @@ def ajustar_material(dados: MaterialAjuste):
         )
         cursor.execute("SELECT codigo, descricao, qtd, local, valor_unit FROM materiais WHERE codigo = %s", (codigo,))
         atualizado = cursor.fetchone()
+
+        agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
+        operador = dados.operador or "Sistema"
+        sinal = "+" if dados.fator >= 0 else ""
+        acao = f"Ajuste de estoque — {atualizado['descricao']} ({codigo}): {sinal}{dados.fator:g} (saldo atual: {atualizado['qtd']:g})"
+        cursor.execute(
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
+            (agora, operador, "ESTOQUE-MATERIAIS", acao, "materiais")
+        )
         conn.commit()
 
     # 🆕 Estoque zerando não avisava ninguém — só se percebia abrindo o
@@ -103,10 +126,20 @@ def remover_material(dados: MaterialRemover):
 
     with get_db() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT descricao FROM materiais WHERE codigo = %s", (codigo,))
+        material = cursor.fetchone()
         cursor.execute("UPDATE materiais SET ativo = FALSE WHERE codigo = %s", (codigo,))
         if cursor.rowcount == 0:
             conn.rollback()
             raise HTTPException(status_code=404, detail=f"Material '{codigo}' não encontrado.")
+
+        agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
+        operador = dados.operador or "Sistema"
+        acao = f"Removeu material [{codigo}] — {material['descricao'] if material else codigo}"
+        cursor.execute(
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
+            (agora, operador, "ESTOQUE-MATERIAIS", acao, "materiais")
+        )
         conn.commit()
 
     return {"sucesso": True}

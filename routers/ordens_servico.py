@@ -206,11 +206,28 @@ def status_maquinas():
 def excluir_ordem_servico(dados: OrdemServicoExcluir):
     with get_db() as conn:
         cursor = conn.cursor()
+        # 🆕 achado de auditoria: excluir uma OS apagava a linha de vez
+        # (DELETE real, com CASCADE até nas fotos) sem deixar NENHUM
+        # rastro de quem excluiu nem o que era — grava um resumo em
+        # log_eventos ANTES de apagar, já que depois do DELETE não sobra
+        # mais nada pra descrever no log.
+        cursor.execute("SELECT numero_os, descricao, status FROM ordens_servico WHERE id = %s", (dados.id,))
+        os_alvo = cursor.fetchone()
+
         # os_fotos tem ON DELETE CASCADE — apagar a OS já apaga as fotos
         # dela junto, sem precisar de um DELETE separado.
         cursor.execute("DELETE FROM ordens_servico WHERE id = %s", (dados.id,))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Ordem de serviço não encontrada.")
+
+        operador = dados.operador or "Sistema"
+        rotulo = os_alvo["numero_os"] if os_alvo and os_alvo["numero_os"] else f"#{dados.id}"
+        cursor.execute(
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
+            (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), operador, f"OS-{dados.id}",
+             f"Excluiu a OS {rotulo} (status era: {os_alvo['status'] if os_alvo else '?'}) — {os_alvo['descricao'] if os_alvo else ''}",
+             "ordens_servico")
+        )
         conn.commit()
 
     return {"sucesso": True}

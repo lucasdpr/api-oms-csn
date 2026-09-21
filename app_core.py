@@ -1780,16 +1780,23 @@ class MaterialCadastro(BaseModel):
     qtd: float = 0
     local: Optional[str] = None
     valor_unit: Optional[float] = None
+    # 🆕 achado de auditoria: este módulo (Estoque Geral) era o único
+    # sem NENHUM registro de quem mexeu — rolos.py/hidraulica.py já
+    # gravam operador em log_eventos, dentro da mesma transação.
+    operador: Optional[str] = None
 
 class MaterialAjuste(BaseModel):
     codigo: str
     fator: float
+    operador: Optional[str] = None
 
 class MaterialRemover(BaseModel):
     codigo: str
+    operador: Optional[str] = None
 
 class PecaExcluir(BaseModel):
     id: str
+    operador: Optional[str] = None
 
 class FolhaoRascunhoSalvar(BaseModel):
     equipamento_id: str
@@ -2122,6 +2129,7 @@ class OrdemServicoStatus(BaseModel):
 
 class OrdemServicoExcluir(BaseModel):
     id: int
+    operador: Optional[str] = None
 
 
 class QualidadeAchadoInput(BaseModel):
@@ -2146,6 +2154,7 @@ class QualidadeSaida(BaseModel):
 
 class QualidadeExcluir(BaseModel):
     id: int
+    operador: Optional[str] = None
 
 
 class QualidadeAchadoCriar(BaseModel):
@@ -2171,6 +2180,7 @@ class QualidadeAchadoResolver(BaseModel):
 
 class QualidadeAchadoExcluir(BaseModel):
     id: int
+    operador: Optional[str] = None
 
 
 class LaudoCriar(BaseModel):
