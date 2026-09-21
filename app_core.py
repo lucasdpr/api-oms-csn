@@ -81,6 +81,16 @@ db_pool = psycopg2_pool.ThreadedConnectionPool(
     dsn=DATABASE_URL,
     cursor_factory=RealDictCursor,
     connect_timeout=20,
+    # 🔧 CORREÇÃO (achado de auditoria): não havia NENHUM statement_timeout
+    # configurado — uma query lenta ou uma linha travada (ex: algum
+    # "SELECT ... FOR UPDATE" concorrente) podia segurar uma conexão do
+    # pool indefinidamente, reduzindo ainda mais o teto de 20 conexões
+    # disponíveis pro resto da API. Isso é a MESMA classe de problema que
+    # já causou o "connection pool exhausted" documentado acima — só que
+    # por query lenta em vez de rajada de requisições. 15s é folgado pra
+    # qualquer query deste sistema (nenhuma faz processamento pesado no
+    # banco), mas corta de vez uma conexão travada.
+    options="-c statement_timeout=15000",
 )
 
 
@@ -2368,6 +2378,51 @@ def validar_token(token: str) -> Optional[str]:
         return matricula
     except Exception:
         return None
+
+
+# ==========================================================================
+# 🆕 LIMITE DE TENTATIVAS DE LOGIN — achado de auditoria: não havia
+# NENHUMA proteção contra força bruta em /api/colaboradores/login nem
+# /definir_senha. Isso é grave combinado com o próprio esquema de senha
+# do sistema: a senha do primeiro acesso é sempre a matrícula (previsível/
+# sequencial), e a senha definitiva mínima é curta — um script sem
+# nenhum bloqueio conseguiria testar credenciais em sequência.
+#
+# Implementação simples em memória (sem dependência nova): guarda só os
+# timestamps das tentativas malsucedidas por matrícula, numa janela
+# deslizante. Não é distribuído (reseta se o processo reiniciar, e não
+# é compartilhado entre múltiplas instâncias do Render caso existam) —
+# mas fecha o cenário real e barato de "script batendo tentativa atrás
+# de tentativa contra uma matrícula", que é o ataque que a auditoria
+# descreveu. Uma solução robusta entre múltiplas instâncias exigiria
+# guardar isso no Postgres/Redis; fica como próximo passo se o sistema
+# crescer pra múltiplas instâncias.
+# ==========================================================================
+import collections
+
+_TENTATIVAS_LOGIN_FALHAS: dict[str, list[float]] = collections.defaultdict(list)
+LOGIN_MAX_TENTATIVAS = 5
+LOGIN_JANELA_SEGUNDOS = 15 * 60  # 15 min
+
+
+def checar_bloqueio_login(matricula: str) -> None:
+    agora = time_lib.time()
+    tentativas = _TENTATIVAS_LOGIN_FALHAS[matricula]
+    tentativas[:] = [t for t in tentativas if agora - t < LOGIN_JANELA_SEGUNDOS]
+    if len(tentativas) >= LOGIN_MAX_TENTATIVAS:
+        espera_min = max(1, int((LOGIN_JANELA_SEGUNDOS - (agora - tentativas[0])) // 60) + 1)
+        raise _HTTPException(
+            status_code=429,
+            detail=f"Muitas tentativas de login pra essa matrícula. Tente de novo em {espera_min} minuto(s)."
+        )
+
+
+def registrar_falha_login(matricula: str) -> None:
+    _TENTATIVAS_LOGIN_FALHAS[matricula].append(time_lib.time())
+
+
+def limpar_falhas_login(matricula: str) -> None:
+    _TENTATIVAS_LOGIN_FALHAS.pop(matricula, None)
 
 
 def exigir_login(authorization: Optional[str] = Header(None)) -> str:
