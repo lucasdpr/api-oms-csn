@@ -15,9 +15,12 @@ from app_core import (
     _buscar_area_colaborador,
     agora_brasil,
     bcrypt,
+    checar_bloqueio_login,
     exigir_admin,
     gerar_token,
     get_db,
+    limpar_falhas_login,
+    registrar_falha_login,
 )
 
 router = APIRouter()
@@ -60,6 +63,11 @@ def get_colaboradores():
 def login_colaborador(dados: LoginColaborador):
     matricula = dados.matricula.strip().upper()
 
+    # 🆕 Bloqueio por força bruta — ver comentário em app_core.py
+    # (checar_bloqueio_login). Checa ANTES de tocar o banco, pra nem
+    # gastar uma consulta com quem já estourou o limite.
+    checar_bloqueio_login(matricula)
+
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -69,6 +77,7 @@ def login_colaborador(dados: LoginColaborador):
         colaborador = cursor.fetchone()
 
         if not colaborador:
+            registrar_falha_login(matricula)
             raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
 
         is_adm = matricula in MATRICULAS_ADM
@@ -77,7 +86,9 @@ def login_colaborador(dados: LoginColaborador):
 
         if colaborador["primeiro_acesso"]:
             if dados.senha.strip().upper() != matricula:
+                registrar_falha_login(matricula)
                 raise HTTPException(status_code=401, detail="No primeiro acesso, a senha é a sua própria matrícula.")
+            limpar_falhas_login(matricula)
             return {
                 "sucesso": True,
                 "nome": colaborador["nome"],
@@ -88,7 +99,10 @@ def login_colaborador(dados: LoginColaborador):
             }
 
         if not colaborador["senha_hash"] or not bcrypt.checkpw(dados.senha.encode(), colaborador["senha_hash"].encode()):
+            registrar_falha_login(matricula)
             raise HTTPException(status_code=401, detail="Senha incorreta.")
+
+        limpar_falhas_login(matricula)
 
         # 🆕 Marca presença já no login — o front também manda heartbeat
         # periódico depois disso pra manter "Online" enquanto o app fica
@@ -116,8 +130,18 @@ def login_colaborador(dados: LoginColaborador):
 def definir_senha_colaborador(dados: DefinirSenhaColaborador):
     matricula = dados.matricula.strip().upper()
 
-    if len(dados.nova_senha.strip()) < 4:
-        raise HTTPException(status_code=400, detail="A nova senha precisa ter pelo menos 4 caracteres.")
+    # 🔧 CORREÇÃO: mínimo subiu de 4 pra 6 — 4 caracteres combinado com a
+    # senha do primeiro acesso ser previsível (a própria matrícula)
+    # deixava muita gente ficando com senha definitiva trivial tipo
+    # "1234". Não resolve tudo sozinho, mas junto com o bloqueio de
+    # força bruta abaixo fecha o cenário mais barato de ataque.
+    if len(dados.nova_senha.strip()) < 6:
+        raise HTTPException(status_code=400, detail="A nova senha precisa ter pelo menos 6 caracteres.")
+
+    # 🆕 Mesmo bloqueio por força bruta do login — essa rota também pede
+    # a senha atual (que no primeiro acesso é a própria matrícula), então
+    # é o mesmo vetor de ataque.
+    checar_bloqueio_login(matricula)
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -128,15 +152,19 @@ def definir_senha_colaborador(dados: DefinirSenhaColaborador):
         colaborador = cursor.fetchone()
 
         if not colaborador:
+            registrar_falha_login(matricula)
             raise HTTPException(status_code=404, detail="Matrícula não encontrada.")
 
         if colaborador["primeiro_acesso"]:
             if dados.senha_atual.strip().upper() != matricula:
+                registrar_falha_login(matricula)
                 raise HTTPException(status_code=401, detail="Senha atual inválida.")
         else:
             if not colaborador["senha_hash"] or not bcrypt.checkpw(dados.senha_atual.encode(), colaborador["senha_hash"].encode()):
+                registrar_falha_login(matricula)
                 raise HTTPException(status_code=401, detail="Senha atual inválida.")
 
+        limpar_falhas_login(matricula)
         novo_hash = bcrypt.hashpw(dados.nova_senha.encode(), bcrypt.gensalt()).decode()
         cursor.execute(
             "UPDATE colaboradores SET senha_hash = %s, primeiro_acesso = FALSE WHERE matricula = %s",

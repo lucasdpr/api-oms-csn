@@ -34,13 +34,21 @@ def cadastrar_material(dados: MaterialCadastro):
         cursor.execute("SELECT qtd FROM materiais WHERE codigo = %s", (codigo,))
         existente = cursor.fetchone()
 
+        # 🔧 CORREÇÃO (achado de auditoria): esta rota não validava
+        # estoque negativo, enquanto a rota irmã /materiais/ajustar já
+        # bloqueia isso explicitamente — mesma regra de negócio aplicada
+        # de forma inconsistente entre as duas.
         if existente:
+            if existente["qtd"] + dados.qtd < 0:
+                raise HTTPException(status_code=400, detail="O saldo em estoque não pode ficar negativo.")
             cursor.execute(
                 "UPDATE materiais SET qtd = qtd + %s, ativo = TRUE WHERE codigo = %s",
                 (dados.qtd, codigo)
             )
             ja_existia = True
         else:
+            if dados.qtd < 0:
+                raise HTTPException(status_code=400, detail="O saldo em estoque não pode ser negativo.")
             cursor.execute(
                 "INSERT INTO materiais (codigo, descricao, qtd, local, valor_unit, ativo) "
                 "VALUES (%s, %s, %s, %s, %s, TRUE)",

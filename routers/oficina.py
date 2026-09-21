@@ -232,8 +232,20 @@ def criar_atividade_oficina(dados: OficinaAtividade):
 
 
 
+STATUS_ATIVIDADE_OFICINA_VALIDOS = ("Pendente", "Em Andamento", "Concluído", "Aguardando", "Recusado")
+
+
 @router.post("/api/oficina/atividade/status", tags=["Oficina"], summary="Mudar status de uma atividade da Oficina")
 def mudar_status_atividade_oficina(dados: OficinaStatus):
+    # 🔧 CORREÇÃO (achado de auditoria): "status" era uma string livre,
+    # nunca validada contra os valores que o resto do código realmente
+    # entende. Qualquer variação (ex: "concluido" sem acento) era aceita
+    # e gravada, mas a comparação exata mais abaixo (`== "Concluído"`)
+    # falhava silenciosamente — a atividade ficava com um status que
+    # nenhuma tela sabia tratar, sem erro nenhum avisando quem mandou.
+    if dados.status not in STATUS_ATIVIDADE_OFICINA_VALIDOS:
+        raise HTTPException(status_code=400, detail=f"Status inválido: \"{dados.status}\". Valores aceitos: {', '.join(STATUS_ATIVIDADE_OFICINA_VALIDOS)}.")
+
     # 🆕 "Recusado" e "Aguardando" exigem motivo — não dá pra só
     # "passar por cima" de uma atividade sem justificar por que não
     # iniciou (Recusado) ou por que travou depois de já ter começado
@@ -911,11 +923,17 @@ def reordenar_fila_ponte_rolante(dados: OficinaFilaReordenar):
         # front — o resto da fila (fora dessa lista) mantém a posição que
         # já tinha, então não precisa mandar TODA a fila, só a parte que
         # o usuário reordenou visualmente.
+        ids_nao_encontrados = []
         for posicao, atividade_id in enumerate(dados.ids_em_ordem, start=1):
             cursor.execute(
                 "UPDATE oficina_atividades SET ordem_fila = %s WHERE id = %s AND area = %s",
                 (posicao, atividade_id, dados.area)
             )
+            if cursor.rowcount == 0:
+                ids_nao_encontrados.append(atividade_id)
+        if ids_nao_encontrados:
+            conn.rollback()
+            raise HTTPException(status_code=404, detail=f"Atividade(s) não encontrada(s) nessa área: {ids_nao_encontrados}. Nenhuma reordenação foi salva.")
         conn.commit()
 
     registrar_evento_atividade_oficina(

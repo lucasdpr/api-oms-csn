@@ -354,6 +354,8 @@ def editar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaEditar):
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(f"UPDATE checklist_execucao_etapas SET {', '.join(campos)} WHERE id = %s", tuple(valores))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Etapa não encontrada.")
         conn.commit()
     return {"sucesso": True}
 
@@ -369,6 +371,8 @@ def excluir_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaExcluir):
         # Desativa em vez de apagar de verdade — preserva o histórico
         # (checklist_execucao_historico) de quem já executou essa etapa.
         cursor.execute("UPDATE checklist_execucao_etapas SET ativo = FALSE WHERE id = %s", (dados.id,))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Etapa não encontrada.")
         conn.commit()
     return {"sucesso": True}
 
@@ -381,8 +385,14 @@ def reordenar_etapas_checklist_execucao(dados: ChecklistExecucaoReordenar):
         raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem reordenar etapas do checklist.")
     with get_db() as conn:
         cursor = conn.cursor()
+        ids_nao_encontrados = []
         for item in dados.itens:
             cursor.execute("UPDATE checklist_execucao_etapas SET ordem = %s WHERE id = %s", (item.ordem, item.id))
+            if cursor.rowcount == 0:
+                ids_nao_encontrados.append(item.id)
+        if ids_nao_encontrados:
+            conn.rollback()
+            raise HTTPException(status_code=404, detail=f"Etapa(s) não encontrada(s): {ids_nao_encontrados}. Nenhuma reordenação foi salva.")
         conn.commit()
     return {"sucesso": True}
 
