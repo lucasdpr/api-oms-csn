@@ -161,11 +161,26 @@ def registrar_saida_qualidade(registro_id: int, dados: QualidadeSaida):
 def excluir_qualidade(dados: QualidadeExcluir):
     with get_db() as conn:
         cursor = conn.cursor()
+        # 🆕 achado de auditoria: excluir apagava o registro de vez (com
+        # fotos e achados junto, via CASCADE) sem nenhum rastro de quem
+        # excluiu — grava um resumo em log_eventos ANTES do DELETE.
+        cursor.execute("SELECT peca_id, status FROM qualidade_registros WHERE id = %s", (dados.id,))
+        registro_alvo = cursor.fetchone()
+
         # qualidade_fotos e qualidade_achados têm ON DELETE CASCADE —
         # apagar o registro já apaga fotos e achados junto.
         cursor.execute("DELETE FROM qualidade_registros WHERE id = %s", (dados.id,))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Registro de qualidade não encontrado.")
+
+        operador = dados.operador or "Sistema"
+        cursor.execute(
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
+            (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), operador,
+             registro_alvo["peca_id"] if registro_alvo else f"QUALIDADE-{dados.id}",
+             f"Excluiu o registro de Qualidade #{dados.id} (status era: {registro_alvo['status'] if registro_alvo else '?'})",
+             "qualidade")
+        )
         conn.commit()
 
     return {"sucesso": True}
@@ -356,9 +371,23 @@ def reabrir_achado_qualidade(dados: QualidadeAchadoExcluir):
 def excluir_achado_qualidade(dados: QualidadeAchadoExcluir):
     with get_db() as conn:
         cursor = conn.cursor()
+        # 🆕 achado de auditoria: mesmo caso de excluir_qualidade acima —
+        # grava quem excluiu antes do DELETE apagar o achado de vez.
+        cursor.execute("SELECT registro_id, descricao FROM qualidade_achados WHERE id = %s", (dados.id,))
+        achado_alvo = cursor.fetchone()
+
         cursor.execute("DELETE FROM qualidade_achados WHERE id = %s", (dados.id,))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Achado não encontrado.")
+
+        operador = dados.operador or "Sistema"
+        cursor.execute(
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
+            (agora_brasil().strftime("%Y-%m-%d %H:%M:%S"), operador,
+             f"QUALIDADE-REGISTRO-{achado_alvo['registro_id']}" if achado_alvo else f"QUALIDADE-ACHADO-{dados.id}",
+             f"Excluiu o achado #{dados.id}: \"{achado_alvo['descricao'] if achado_alvo else '?'}\"",
+             "qualidade")
+        )
         conn.commit()
 
     return {"sucesso": True}

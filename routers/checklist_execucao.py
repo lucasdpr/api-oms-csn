@@ -319,6 +319,10 @@ def criar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaNova):
 
 @router.post("/api/checklist-execucao/etapas/editar", tags=["Checklist de Execução"], summary="Editar texto (e opcionalmente a ponte com o Folhão) de uma etapa (só ADM do checklist)")
 def editar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaEditar):
+    # 🆕 achado de auditoria: editar/excluir/reordenar etapa não deixava
+    # NENHUM rastro de quem fez — diferente de criar_etapa, que já grava
+    # criado_por na própria linha. checklist_execucao.py inteiro também
+    # nunca usava log_eventos (auditoria central). Registra aqui.
     if dados.operador.upper() not in MATRICULAS_ADM:
         raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem editar etapas do checklist.")
 
@@ -356,6 +360,10 @@ def editar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaEditar):
         cursor.execute(f"UPDATE checklist_execucao_etapas SET {', '.join(campos)} WHERE id = %s", tuple(valores))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Etapa não encontrada.")
+        cursor.execute(
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
+            (agora_brasil().isoformat(), dados.operador, f"CHECKLIST-ETAPA-{dados.id}", f"Editou a etapa #{dados.id} do Checklist de Execução: \"{dados.texto}\"", "checklist_execucao")
+        )
         conn.commit()
     return {"sucesso": True}
 
@@ -373,6 +381,10 @@ def excluir_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaExcluir):
         cursor.execute("UPDATE checklist_execucao_etapas SET ativo = FALSE WHERE id = %s", (dados.id,))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Etapa não encontrada.")
+        cursor.execute(
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
+            (agora_brasil().isoformat(), dados.operador, f"CHECKLIST-ETAPA-{dados.id}", f"Excluiu (desativou) a etapa #{dados.id} do Checklist de Execução", "checklist_execucao")
+        )
         conn.commit()
     return {"sucesso": True}
 
@@ -393,6 +405,11 @@ def reordenar_etapas_checklist_execucao(dados: ChecklistExecucaoReordenar):
         if ids_nao_encontrados:
             conn.rollback()
             raise HTTPException(status_code=404, detail=f"Etapa(s) não encontrada(s): {ids_nao_encontrados}. Nenhuma reordenação foi salva.")
+        ids = [item.id for item in dados.itens]
+        cursor.execute(
+            "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
+            (agora_brasil().isoformat(), dados.operador, "CHECKLIST-ETAPAS", f"Reordenou {len(ids)} etapa(s) do Checklist de Execução: {ids}", "checklist_execucao")
+        )
         conn.commit()
     return {"sucesso": True}
 
