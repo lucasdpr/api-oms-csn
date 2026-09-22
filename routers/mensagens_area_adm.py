@@ -1,6 +1,6 @@
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional
 from app_core import (
     MensagemAreaAdmEnviar,
@@ -9,6 +9,7 @@ from app_core import (
     AREA_OFICINA_NOMES,
     agora_brasil,
     enviar_push_para_area,
+    exigir_login,
     get_db,
 )
 
@@ -46,7 +47,7 @@ DIGITANDO_TTL_SEGUNDOS = 4
 
 
 @router.get("/api/mensagens_area", tags=["Mensagens Área-ADM"], summary="Listar conversa — canal 'supervisao' (área<->ADM) ou 'tecnicos' (área<->área, exige area_destino)")
-def get_mensagens_area(area: str, canal: str = "supervisao", area_destino: Optional[str] = None):
+def get_mensagens_area(area: str, canal: str = "supervisao", area_destino: Optional[str] = None, _matricula: str = Depends(exigir_login)):
     with get_db() as conn:
         cursor = conn.cursor()
         if canal == "tecnicos":
@@ -77,7 +78,7 @@ def get_mensagens_area(area: str, canal: str = "supervisao", area_destino: Optio
 
 
 @router.get("/api/mensagens_area/resumo", tags=["Mensagens Área-ADM"], summary="Resumo por área — última mensagem e não lidas do canal 'supervisao' (visão do ADM)")
-def get_mensagens_area_resumo():
+def get_mensagens_area_resumo(_matricula: str = Depends(exigir_login)):
     with get_db() as conn:
         cursor = conn.cursor()
         # 🆕 Só o canal 'supervisao' entra aqui — é o que aparece como
@@ -101,7 +102,7 @@ def get_mensagens_area_resumo():
 
 
 @router.get("/api/mensagens_area/resumo_tecnicos", tags=["Mensagens Área-ADM"], summary="Resumo das conversas área-a-área (canal 'tecnicos') de uma área, com todas as outras")
-def get_mensagens_area_resumo_tecnicos(area: str):
+def get_mensagens_area_resumo_tecnicos(area: str, _matricula: str = Depends(exigir_login)):
     with get_db() as conn:
         cursor = conn.cursor()
         # Pega toda mensagem onde a área é qualquer um dos dois lados do
@@ -135,7 +136,7 @@ def marcar_digitando(dados: MensagemAreaAdmDigitando):
 
 
 @router.get("/api/mensagens_area/digitando", tags=["Mensagens Área-ADM"], summary="Verifica se a OUTRA área está digitando pra mim agora")
-def get_digitando(area: str, area_destino: str):
+def get_digitando(area: str, area_destino: str, _matricula: str = Depends(exigir_login)):
     """`area` = minha área (quem pergunta), `area_destino` = a área do
     outro lado da conversa — mesma convenção usada no resto deste
     arquivo. Retorna True só se o PING mais recente do outro lado pra
@@ -146,7 +147,7 @@ def get_digitando(area: str, area_destino: str):
 
 
 @router.get("/api/mensagens_area/nao_lidas", tags=["Mensagens Área-ADM"], summary="Quantidade de mensagens não lidas de uma área (ADM->área + área<->área)")
-def get_mensagens_area_nao_lidas(area: str):
+def get_mensagens_area_nao_lidas(area: str, _matricula: str = Depends(exigir_login)):
     """🔧 CORREÇÃO ("mandei mensagem no Entre Técnicos e não chegou nem
     notificação pro outro lado"): esta rota só contava não lidas do
     canal 'supervisao' (ADM -> área) — o canal 'tecnicos' (área<->área)

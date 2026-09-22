@@ -17,6 +17,7 @@ from app_core import (
     bcrypt,
     checar_bloqueio_login,
     exigir_admin,
+    exigir_login,
     gerar_token,
     get_db,
     limpar_falhas_login,
@@ -48,7 +49,14 @@ def _registrar_evento_colaborador(cursor, matricula_alvo, acao, admin_matricula)
 
 
 @router.get("/api/colaboradores", tags=["Colaboradores"], summary="Listar colaboradores ativos")
-def get_colaboradores():
+def get_colaboradores(_matricula: str = Depends(exigir_login)):
+    # 🔧 CORREÇÃO (achado de auditoria de Go-Live): essa listagem (com
+    # `primeiro_acesso`, que mostra quem nunca trocou a senha padrão)
+    # era pública, sem exigir login nenhum — combinado com a senha do
+    # primeiro acesso ser sempre a própria matrícula, dava pra escanear
+    # quem estava vulnerável sem credencial alguma. Confirmado: nenhuma
+    # tela do frontend chama essa rota antes do login (só há uso de
+    # /api/colaboradores/todos, dentro de painéis já logados).
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -185,11 +193,20 @@ def definir_senha_colaborador(dados: DefinirSenhaColaborador):
 # nome/cargo/matrícula, sem dado sensível (sem senha_hash).
 # ==========================================
 @router.get("/api/colaboradores/todos", tags=["Colaboradores"], summary="Listar todos os colaboradores (ativos e inativos)")
-def get_colaboradores_todos():
+def get_colaboradores_todos(_matricula: str = Depends(exigir_login)):
     """Lista TODOS os colaboradores, ativos e inativos — usado só no
     painel de administração (a rota /api/colaboradores normal, usada
     pelo login e por outras telas, continua trazendo só quem está
-    ativo)."""
+    ativo).
+
+    🔧 CORREÇÃO (achado de auditoria de Go-Live): esta rota devolve
+    `primeiro_acesso` — quem nunca trocou a senha padrão (que é a
+    própria matrícula). Estava pública, sem exigir login nenhum. Isso é
+    o primeiro elo de uma cadeia real de tomada de conta: escaneia essa
+    lista, filtra `primeiro_acesso: true`, tenta a senha = matrícula em
+    /login ou /definir_senha, pronto. Confirmado que só é chamada de
+    dentro de painéis administrativos já logados — nenhum uso antes do
+    login."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -201,11 +218,18 @@ def get_colaboradores_todos():
 
 
 @router.post("/api/colaboradores/heartbeat", tags=["Colaboradores"], summary="Sinal de vida — mantém o colaborador \"Online\" na Administração")
-def heartbeat_colaborador(dados: ColaboradorHeartbeat):
+def heartbeat_colaborador(dados: ColaboradorHeartbeat, matricula_token: str = Depends(exigir_login)):
     """Chamado pelo front a cada ~60s enquanto alguém está logado e com
     o app aberto (ver window.iniciarHeartbeatColaborador em script.js).
-    Não exige admin — é o próprio colaborador reportando presença."""
-    matricula = dados.matricula.strip().upper()
+    Não exige admin — é o próprio colaborador reportando presença.
+
+    🔧 CORREÇÃO (achado de auditoria de Go-Live — IDOR): antes usava
+    `dados.matricula` (corpo da requisição) pra decidir de QUEM é a
+    presença — qualquer colaborador logado podia mandar a matrícula de
+    OUTRO e falsear o `ultimo_acesso`/"Online" dele. Agora usa a
+    matrícula do token (exigir_login), a mesma de quem está de fato
+    autenticado — ignora dados.matricula."""
+    matricula = matricula_token
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
