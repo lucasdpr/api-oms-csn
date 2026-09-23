@@ -81,17 +81,18 @@ db_pool = psycopg2_pool.ThreadedConnectionPool(
     dsn=DATABASE_URL,
     cursor_factory=RealDictCursor,
     connect_timeout=20,
-    # 🔧 CORREÇÃO (achado de auditoria): não havia NENHUM statement_timeout
-    # configurado — uma query lenta ou uma linha travada (ex: algum
-    # "SELECT ... FOR UPDATE" concorrente) podia segurar uma conexão do
-    # pool indefinidamente, reduzindo ainda mais o teto de 20 conexões
-    # disponíveis pro resto da API. Isso é a MESMA classe de problema que
-    # já causou o "connection pool exhausted" documentado acima — só que
-    # por query lenta em vez de rajada de requisições. 15s é folgado pra
-    # qualquer query deste sistema (nenhuma faz processamento pesado no
-    # banco), mas corta de vez uma conexão travada.
-    options="-c statement_timeout=15000",
+    # 🐛 CORREÇÃO (incidente em produção): `options="-c statement_timeout=..."`
+    # manda esse parâmetro no pacote de STARTUP da conexão — o pooler do
+    # Neon (endpoint "-pooler", pgbouncer) rejeita startup parameter
+    # desconhecido e derrubava TODA conexão nova com
+    # "unsupported startup parameter in options: statement_timeout",
+    # travando o deploy inteiro (nem subia). O statement_timeout (mesmo
+    # motivo documentado acima, achado de auditoria) agora é aplicado
+    # via SET logo após pegar a conexão do pool, em get_db() — funciona
+    # igual e é compatível com o pooler.
 )
+
+STATEMENT_TIMEOUT_MS = 15000
 
 
 @contextmanager
@@ -114,6 +115,14 @@ def get_db():
                 cur.fetchone()
         except Exception:
             conn = _descartar_e_pegar_outra()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}")
+    except Exception:
+        conn = _descartar_e_pegar_outra()
+        with conn.cursor() as cur:
+            cur.execute(f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}")
 
     try:
         yield conn
