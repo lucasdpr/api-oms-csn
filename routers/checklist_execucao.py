@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from app_core import (
     AREA_OFICINA_NOMES,
     ChecklistExecucaoAtividadeExtra,
@@ -10,12 +10,12 @@ from app_core import (
     ChecklistExecucaoIniciar,
     ChecklistExecucaoMarcar,
     ChecklistExecucaoReordenar,
-    MATRICULAS_ADM,
     NOME_AREA_PUSH,
     OficinaAtividade,
     Optional,
     agora_brasil,
     enviar_push_para_area,
+    exigir_admin,
     get_db,
     json_lib,
     registrar_evento_atividade_oficina,
@@ -293,9 +293,14 @@ def valores_folhao_checklist_execucao(tipo_equipamento: str, execucao_id: Option
 
 
 @router.post("/api/checklist-execucao/etapas", tags=["Checklist de Execução"], summary="Cadastrar nova etapa (só ADM do checklist)")
-def criar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaNova):
-    if dados.operador.upper() not in MATRICULAS_ADM:
-        raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem cadastrar etapas do checklist.")
+def criar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaNova, matricula_admin: str = Depends(exigir_admin)):
+    # 🔧 CORREÇÃO CRÍTICA (achado de auditoria de Go-Live): a checagem de
+    # admin usava `dados.operador` — um campo do CORPO da requisição, que
+    # qualquer chamador escolhe. Um técnico comum podia mandar
+    # `operador: "<matrícula de ADM>"` no JSON e passar direto por essa
+    # checagem (escalada de privilégio trivial). Agora usa
+    # Depends(exigir_admin), que valida de verdade o token no header
+    # Authorization contra o backend — não dá pra forjar sem o token.
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -308,7 +313,7 @@ def criar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaNova):
             INSERT INTO checklist_execucao_etapas (equipamento_id, area, especialidade, texto, ordem, criado_por, criado_em, folhao_campo, tipo_resposta, descricao)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
             """,
-            (dados.equipamento_id, dados.area, dados.especialidade, dados.texto, proxima_ordem, dados.operador, agora_brasil().isoformat(), dados.folhao_campo, dados.tipo_resposta, dados.descricao)
+            (dados.equipamento_id, dados.area, dados.especialidade, dados.texto, proxima_ordem, matricula_admin, agora_brasil().isoformat(), dados.folhao_campo, dados.tipo_resposta, dados.descricao)
         )
         novo_id = cursor.fetchone()["id"]
         conn.commit()
@@ -318,13 +323,15 @@ def criar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaNova):
 
 
 @router.post("/api/checklist-execucao/etapas/editar", tags=["Checklist de Execução"], summary="Editar texto (e opcionalmente a ponte com o Folhão) de uma etapa (só ADM do checklist)")
-def editar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaEditar):
+def editar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaEditar, matricula_admin: str = Depends(exigir_admin)):
     # 🆕 achado de auditoria: editar/excluir/reordenar etapa não deixava
     # NENHUM rastro de quem fez — diferente de criar_etapa, que já grava
     # criado_por na própria linha. checklist_execucao.py inteiro também
     # nunca usava log_eventos (auditoria central). Registra aqui.
-    if dados.operador.upper() not in MATRICULAS_ADM:
-        raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem editar etapas do checklist.")
+    #
+    # 🔧 CORREÇÃO CRÍTICA (achado de auditoria de Go-Live): a checagem de
+    # admin era feita em cima de `dados.operador` (corpo da requisição,
+    # controlável pelo chamador) — agora usa Depends(exigir_admin).
 
     # 🆕 Se veio um novo folhao_campo pra uma etapa de medição múltipla,
     # confere que é um JSON válido ANTES de gravar — um JSON quebrado
@@ -362,7 +369,7 @@ def editar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaEditar):
             raise HTTPException(status_code=404, detail="Etapa não encontrada.")
         cursor.execute(
             "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
-            (agora_brasil().isoformat(), dados.operador, f"CHECKLIST-ETAPA-{dados.id}", f"Editou a etapa #{dados.id} do Checklist de Execução: \"{dados.texto}\"", "checklist_execucao")
+            (agora_brasil().isoformat(), matricula_admin, f"CHECKLIST-ETAPA-{dados.id}", f"Editou a etapa #{dados.id} do Checklist de Execução: \"{dados.texto}\"", "checklist_execucao")
         )
         conn.commit()
     return {"sucesso": True}
@@ -371,9 +378,7 @@ def editar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaEditar):
 
 
 @router.post("/api/checklist-execucao/etapas/excluir", tags=["Checklist de Execução"], summary="Excluir (desativar) uma etapa (só ADM do checklist)")
-def excluir_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaExcluir):
-    if dados.operador.upper() not in MATRICULAS_ADM:
-        raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem excluir etapas do checklist.")
+def excluir_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaExcluir, matricula_admin: str = Depends(exigir_admin)):
     with get_db() as conn:
         cursor = conn.cursor()
         # Desativa em vez de apagar de verdade — preserva o histórico
@@ -383,7 +388,7 @@ def excluir_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaExcluir):
             raise HTTPException(status_code=404, detail="Etapa não encontrada.")
         cursor.execute(
             "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
-            (agora_brasil().isoformat(), dados.operador, f"CHECKLIST-ETAPA-{dados.id}", f"Excluiu (desativou) a etapa #{dados.id} do Checklist de Execução", "checklist_execucao")
+            (agora_brasil().isoformat(), matricula_admin, f"CHECKLIST-ETAPA-{dados.id}", f"Excluiu (desativou) a etapa #{dados.id} do Checklist de Execução", "checklist_execucao")
         )
         conn.commit()
     return {"sucesso": True}
@@ -392,9 +397,7 @@ def excluir_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaExcluir):
 
 
 @router.post("/api/checklist-execucao/etapas/reordenar", tags=["Checklist de Execução"], summary="Reordenar etapas dentro de uma seção (só ADM do checklist)")
-def reordenar_etapas_checklist_execucao(dados: ChecklistExecucaoReordenar):
-    if dados.operador.upper() not in MATRICULAS_ADM:
-        raise HTTPException(status_code=403, detail="Só as matrículas autorizadas podem reordenar etapas do checklist.")
+def reordenar_etapas_checklist_execucao(dados: ChecklistExecucaoReordenar, matricula_admin: str = Depends(exigir_admin)):
     with get_db() as conn:
         cursor = conn.cursor()
         ids_nao_encontrados = []
@@ -408,7 +411,7 @@ def reordenar_etapas_checklist_execucao(dados: ChecklistExecucaoReordenar):
         ids = [item.id for item in dados.itens]
         cursor.execute(
             "INSERT INTO log_eventos (data_hora, operador, peca_id, acao, area) VALUES (%s, %s, %s, %s, %s)",
-            (agora_brasil().isoformat(), dados.operador, "CHECKLIST-ETAPAS", f"Reordenou {len(ids)} etapa(s) do Checklist de Execução: {ids}", "checklist_execucao")
+            (agora_brasil().isoformat(), matricula_admin, "CHECKLIST-ETAPAS", f"Reordenou {len(ids)} etapa(s) do Checklist de Execução: {ids}", "checklist_execucao")
         )
         conn.commit()
     return {"sucesso": True}

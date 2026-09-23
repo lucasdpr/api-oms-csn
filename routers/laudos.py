@@ -51,17 +51,33 @@ def criar_laudo(dados: LaudoCriar):
     agora = agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
-        # 🔧 CORREÇÃO: com execucao_id, faz UPSERT (ver índice único
-        # laudos_execucao_id_unica) — clicar "Salvar" várias vezes durante
-        # o mesmo reparo atualiza a mesma linha em vez de acumular uma
-        # nova a cada clique. Sem execucao_id (chamadores antigos, ex:
-        # Checklist de Qualidade de Saída), mantém o INSERT de sempre.
+        # 🔧 CORREÇÃO CRÍTICA (achado de auditoria de Go-Live): faltava o
+        # predicado WHERE no ON CONFLICT — laudos_execucao_id_unica é um
+        # índice ÚNICO PARCIAL (só onde execucao_id IS NOT NULL), e o
+        # Postgres só usa um índice parcial como alvo do ON CONFLICT se a
+        # cláusula repetir o mesmo predicado. Sem isso, TODO INSERT com
+        # execucao_id preenchido falhava com "no unique or exclusion
+        # constraint matching the ON CONFLICT specification" — ou seja,
+        # nenhum Folhão com Checklist de Execução iniciado conseguia
+        # salvar o laudo, um 500 em produção.
+        #
+        # 🔧 CORREÇÃO (mesma auditoria): também valida que a execução
+        # pertence à MESMA peça informada — sem isso, mandar o
+        # execucao_id de outro equipamento sobrescrevia o laudo daquele
+        # reparo (IDOR com perda de dado).
         if dados.execucao_id is not None:
+            cursor.execute(
+                "SELECT equipamento_id FROM checklist_execucao_execucoes WHERE id = %s",
+                (dados.execucao_id,)
+            )
+            execucao = cursor.fetchone()
+            if not execucao or execucao["equipamento_id"] != dados.peca_id:
+                raise HTTPException(status_code=400, detail="execucao_id não corresponde à peça informada.")
             cursor.execute(
                 """
                 INSERT INTO laudos (peca_id, tipo, html, criado_por, criado_em, execucao_id)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (execucao_id) DO UPDATE SET
+                ON CONFLICT (execucao_id) WHERE execucao_id IS NOT NULL DO UPDATE SET
                     peca_id = EXCLUDED.peca_id,
                     tipo = EXCLUDED.tipo,
                     html = EXCLUDED.html,

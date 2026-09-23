@@ -2322,13 +2322,24 @@ from fastapi import Header, HTTPException as _HTTPException
 
 SECRET_KEY = os.environ.get("SECRET_KEY")
 if not SECRET_KEY:
-    # Não derruba o servidor em produção por causa disso (a API tem
-    # outras rotas que continuam funcionando sem SECRET_KEY), mas avisa
-    # bem alto — sem isso configurado no Render, todo login vira token
-    # assinado com uma chave previsível, o que anula a proteção.
-    print("⚠️ SECRET_KEY não configurada — usando uma chave de DESENVOLVIMENTO. "
-          "Configure SECRET_KEY no ambiente antes de ir pra produção (veja .env.example).")
-    SECRET_KEY = "chave-de-desenvolvimento-troque-em-producao"
+    # 🔧 CORREÇÃO CRÍTICA (achado de auditoria de Go-Live): antes isso só
+    # imprimia um aviso e seguia com uma chave hardcoded PÚBLICA (visível
+    # no histórico do Git) — qualquer pessoa com acesso ao repositório
+    # conseguia forjar um token HMAC válido pra qualquer matrícula,
+    # incluindo as 3 de MATRICULAS_ADM, e o middleware de login aceitava
+    # de boa. Mesmo padrão que DATABASE_URL já usa: falha fechada — sem
+    # a chave configurada, o servidor nem sobe, em vez de subir
+    # "protegido" por uma senha que está no código-fonte.
+    #
+    # ⚠️ ATENÇÃO ANTES DE MERGEAR/FAZER DEPLOY: confirme que a env var
+    # SECRET_KEY está configurada no Render ANTES de subir esta mudança
+    # — se não estiver, o servidor vai se recusar a iniciar (é
+    # exatamente o comportamento pretendido, mas confirme antes pra não
+    # ser pego de surpresa num deploy).
+    raise RuntimeError(
+        "SECRET_KEY não configurada. Defina essa variável de ambiente antes de subir o "
+        "servidor (veja .env.example) — sem ela, a autenticação inteira fica vulnerável."
+    )
 
 TOKEN_VALIDADE_SEGUNDOS = 12 * 60 * 60  # 12h — precisa logar de novo depois disso
 
@@ -2410,15 +2421,28 @@ def validar_token(token: str) -> Optional[str]:
 # ==========================================================================
 import collections
 
-_TENTATIVAS_LOGIN_FALHAS: dict[str, list[float]] = collections.defaultdict(list)
+_TENTATIVAS_LOGIN_FALHAS: dict[str, list[float]] = {}
 LOGIN_MAX_TENTATIVAS = 5
 LOGIN_JANELA_SEGUNDOS = 15 * 60  # 15 min
+# 🔧 CORREÇÃO (achado de auditoria de Go-Live): teto duro pro dicionário
+# em memória — sem isso, alguém mandando um monte de matrículas
+# inventadas (nem precisa acertar nenhuma) enchia essa estrutura sem
+# limite, um vetor de esgotamento de memória do processo.
+LOGIN_TENTATIVAS_MAX_CHAVES = 5000
 
 
 def checar_bloqueio_login(matricula: str) -> None:
     agora = time_lib.time()
-    tentativas = _TENTATIVAS_LOGIN_FALHAS[matricula]
-    tentativas[:] = [t for t in tentativas if agora - t < LOGIN_JANELA_SEGUNDOS]
+    # 🔧 CORREÇÃO: antes usava defaultdict(list) e o simples ACESSO
+    # `_TENTATIVAS_LOGIN_FALHAS[matricula]` já criava uma entrada nova —
+    # ou seja, TODA tentativa de login (mesmo bem-sucedida, mesmo com
+    # matrícula que não existe) inflava o dicionário. Agora só lê; quem
+    # cria entrada é registrar_falha_login (só em falha de verdade).
+    tentativas = [t for t in _TENTATIVAS_LOGIN_FALHAS.get(matricula, []) if agora - t < LOGIN_JANELA_SEGUNDOS]
+    if tentativas:
+        _TENTATIVAS_LOGIN_FALHAS[matricula] = tentativas
+    elif matricula in _TENTATIVAS_LOGIN_FALHAS:
+        del _TENTATIVAS_LOGIN_FALHAS[matricula]
     if len(tentativas) >= LOGIN_MAX_TENTATIVAS:
         espera_min = max(1, int((LOGIN_JANELA_SEGUNDOS - (agora - tentativas[0])) // 60) + 1)
         raise _HTTPException(
@@ -2428,7 +2452,15 @@ def checar_bloqueio_login(matricula: str) -> None:
 
 
 def registrar_falha_login(matricula: str) -> None:
-    _TENTATIVAS_LOGIN_FALHAS[matricula].append(time_lib.time())
+    if len(_TENTATIVAS_LOGIN_FALHAS) >= LOGIN_TENTATIVAS_MAX_CHAVES and matricula not in _TENTATIVAS_LOGIN_FALHAS:
+        # Dicionário cheio e essa matrícula nem tem entrada ainda — não
+        # deixa crescer mais. Efeito colateral aceitável: sob esse
+        # cenário extremo (alguém tentando encher a memória de
+        # propósito), matrículas novas param de ganhar bloqueio de força
+        # bruta até o processo reiniciar ou entradas antigas expirarem —
+        # pior que isso seria o processo cair por falta de memória.
+        return
+    _TENTATIVAS_LOGIN_FALHAS.setdefault(matricula, []).append(time_lib.time())
 
 
 def limpar_falhas_login(matricula: str) -> None:
