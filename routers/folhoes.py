@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from app_core import (
     FolhaoRascunhoFinalizar,
     FolhaoRascunhoSalvar,
     agora_brasil,
+    exigir_login,
     get_db,
 )
 
@@ -12,7 +13,7 @@ router = APIRouter()
 
 
 @router.get("/api/folhao/rascunhos/todos", tags=["Folhões"], summary="Listar todos os folhões em andamento (rascunhos salvos)")
-def listar_todos_rascunhos_folhao():
+def listar_todos_rascunhos_folhao(matricula: str = Depends(exigir_login)):
     """Usado na tela 'Em andamento' do Painel do Técnico: lista todo
     folhão que tem progresso salvo na nuvem, pra qualquer um (técnico
     da área certa, ou ADM) continuar de onde parou. O front-end filtra
@@ -29,7 +30,7 @@ def listar_todos_rascunhos_folhao():
 
 
 @router.get("/api/folhao/{equipamento_id}", tags=["Folhões"], summary="Carregar rascunho salvo de um folhão")
-def get_rascunho_folhao(equipamento_id: str):
+def get_rascunho_folhao(equipamento_id: str, matricula: str = Depends(exigir_login)):
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
