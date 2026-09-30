@@ -234,7 +234,7 @@ def valores_folhao_checklist_execucao(tipo_equipamento: str, execucao_id: Option
             FROM checklist_execucao_etapas e
             LEFT JOIN checklist_execucao_marcacoes m
                    ON m.etapa_id = e.id AND m.execucao_id = %s
-            WHERE e.equipamento_id = %s AND e.ativo = TRUE AND e.folhao_campo IS NOT NULL
+            WHERE e.equipamento_id = %s AND e.ativo = TRUE AND e.folhao_campo IS NOT NULL AND TRIM(e.folhao_campo) <> ''
             """,
             (execucao_id, tipo_equipamento)
         )
@@ -258,6 +258,8 @@ def valores_folhao_checklist_execucao(tipo_equipamento: str, execucao_id: Option
             except (TypeError, ValueError):
                 continue  # JSON mal formado — pula essa etapa sem derrubar o resto
             for chave, campo_real in mapa_campos.items():
+                if not campo_real or not str(campo_real).strip():
+                    continue  # chave sem campo mapeado no Folhão
                 valores[campo_real] = mapa_valores.get(chave, "")
         elif l["tipo_resposta"] == "medicao":
             valores[l["folhao_campo"]] = l["valor"] or ""
@@ -349,8 +351,12 @@ def editar_etapa_checklist_execucao(dados: ChecklistExecucaoEtapaEditar, matricu
     campos = ["texto = %s"]
     valores = [dados.texto]
     if dados.folhao_campo is not None:
+        # 🔧 Apagar o mapeamento em "Editar Etapa" mandava "" e gravava
+        # string vazia (não NULL) — a ponte com o Folhão tratava isso como
+        # um campo "não encontrado" e mostrava o aviso laranja com a lista
+        # em branco. Vazio agora vira NULL (etapa sem campo no Folhão).
         campos.append("folhao_campo = %s")
-        valores.append(dados.folhao_campo)
+        valores.append(dados.folhao_campo.strip() or None)
     if dados.tipo_resposta is not None:
         campos.append("tipo_resposta = %s")
         valores.append(dados.tipo_resposta)
