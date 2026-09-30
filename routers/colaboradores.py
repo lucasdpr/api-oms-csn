@@ -134,6 +134,15 @@ def login_colaborador(dados: LoginColaborador):
 
 
 
+@router.post("/api/colaboradores/renovar_sessao", tags=["Colaboradores"], summary="Renova o token de sessão (sessão deslizante)")
+def renovar_sessao(matricula: str = Depends(exigir_login)):
+    """Devolve um token novo com a validade cheia. Exige um token AINDA
+    válido (exigir_login já confere assinatura, expiração, colaborador
+    ativo e logout forçado) — então quem foi bloqueado ou teve a sessão
+    revogada não consegue se renovar."""
+    return {"sucesso": True, "token": gerar_token(matricula)}
+
+
 @router.post("/api/colaboradores/definir_senha", tags=["Colaboradores"], summary="Definir senha no primeiro acesso")
 def definir_senha_colaborador(dados: DefinirSenhaColaborador):
     matricula = dados.matricula.strip().upper()

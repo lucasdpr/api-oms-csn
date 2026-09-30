@@ -2341,7 +2341,16 @@ if not SECRET_KEY:
         "servidor (veja .env.example) — sem ela, a autenticação inteira fica vulnerável."
     )
 
-TOKEN_VALIDADE_SEGUNDOS = 12 * 60 * 60  # 12h — precisa logar de novo depois disso
+# 🔧 CORREÇÃO ("faço login, fecho o app, no outro dia não consigo alterar
+# nada e preciso logar de novo"): a validade era 12h fixas — o app
+# continuava aparecendo como logado (o login fica salvo no aparelho),
+# mas todo POST/PUT/DELETE voltava 401. Agora a sessão dura 7 dias E é
+# renovada sozinha enquanto o app é usado (POST
+# /api/colaboradores/renovar_sessao, chamado pelo front ao abrir e a
+# cada 30 min) — na prática só pede login de novo depois de 7 dias sem
+# abrir o app. Bloqueio de colaborador e "forçar logout" continuam
+# valendo na hora (validar_token consulta o banco a cada request).
+TOKEN_VALIDADE_SEGUNDOS = 7 * 24 * 60 * 60
 
 
 def gerar_token(matricula: str) -> str:
