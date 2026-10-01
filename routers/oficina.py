@@ -721,6 +721,16 @@ def salvar_nota_area_oficina(dados: OficinaNota):
 
 
 
+@router.get("/api/oficina/equipe_todas", tags=["Oficina"], summary="Equipe de TODAS as áreas (uma chamada só)")
+def listar_equipe_todas_areas():
+    """🆕 O Painel do Supervisor chamava /api/oficina/equipe/{area} uma vez
+    por área (17 requisições). Mesmos campos, com a área junto."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT matricula, nome, cargo, area FROM equipe_oficina WHERE ativo = TRUE ORDER BY area, nome")
+        return cursor.fetchall()
+
+
 @router.get("/api/oficina/equipe/{area}", tags=["Oficina"], summary="Listar equipe de uma área")
 def get_equipe_area_oficina(area: str):
     """Lista os colaboradores (mecânicos, eletricistas etc.) cadastrados
