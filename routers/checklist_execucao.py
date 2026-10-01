@@ -137,6 +137,53 @@ def finalizar_execucao_checklist(dados: ChecklistExecucaoFinalizar):
 
 
 
+@router.get("/api/checklist-execucao/progresso", tags=["Checklist de Execução"], summary="Progresso de TODAS as execuções em andamento (uma chamada só)")
+def progresso_execucoes_em_andamento():
+    """🆕 Antes o front chamava /status/{id} + /api/laudos?peca_id=X pra
+    CADA peça em reparo (2 chamadas por peça, e a de laudos trazia o HTML
+    inteiro do laudo só pra saber se existia) — o Painel do Supervisor
+    disparava ~40 requisições e baixava MBs a cada abertura. Aqui vem tudo
+    numa consulta.
+
+    🔧 folhao_salvo agora olha só o laudo DESTE reparo (mesma execução, ou
+    gravado depois do início dela). Antes bastava a peça ter QUALQUER
+    laudo antigo — a partir do 2º reparo de uma peça, o "Folhão salvo"
+    já vinha marcado sem ninguém ter salvo nada."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT x.id AS execucao_id, x.equipamento_id, x.tipo_equipamento, x.tipo_execucao,
+                   x.iniciada_em, x.tecnico_nome, x.tecnico_matricula,
+                   COALESCE(c.total, 0) AS total, COALESCE(c.marcadas, 0) AS marcadas,
+                   EXISTS (
+                       SELECT 1 FROM laudos l
+                       WHERE l.peca_id = x.equipamento_id
+                         AND (l.execucao_id = x.id OR (l.execucao_id IS NULL AND l.criado_em >= LEFT(REPLACE(x.iniciada_em, 'T', ' '), 19)))
+                   ) AS folhao_salvo
+            FROM checklist_execucao_execucoes x
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE m.marcado = TRUE) AS marcadas
+                FROM checklist_execucao_etapas e
+                LEFT JOIN checklist_execucao_marcacoes m ON m.etapa_id = e.id AND m.execucao_id = x.id
+                WHERE e.equipamento_id = x.tipo_equipamento AND e.ativo = TRUE
+            ) c ON TRUE
+            WHERE x.status = 'em_andamento'
+            ORDER BY x.id DESC
+            """
+        )
+        linhas = cursor.fetchall()
+    resultado = []
+    for r in linhas:
+        total, marcadas = r["total"] or 0, r["marcadas"] or 0
+        resultado.append({
+            **r,
+            "percentual": round((marcadas / total) * 100, 1) if total > 0 else 0,
+            "completo": total > 0 and marcadas == total,
+        })
+    return resultado
+
+
 @router.get("/api/checklist-execucao/status/{equipamento_id}", tags=["Checklist de Execução"], summary="Progresso da execução em andamento dessa tag")
 def status_checklist_execucao(equipamento_id: str):
     """Usado pra decidir se o botão 'Concluir' pode ser liberado, e

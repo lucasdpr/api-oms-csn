@@ -18,16 +18,21 @@ router = APIRouter()
 # todo mundo na Auditoria (igual o resto do histórico).
 # ==========================================
 @router.get("/api/laudos", tags=["Laudos"], summary="Listar laudos gerados")
-def listar_laudos(peca_id: Optional[str] = None, limite: int = 200):
+def listar_laudos(peca_id: Optional[str] = None, limite: int = 200, resumo: bool = False):
+    # 🆕 resumo=true: devolve tudo MENOS o html (o documento inteiro, dezenas
+    # de KB cada). Listas e contagens (Painel do Supervisor, Auditoria) só
+    # precisam de quem/quando/qual peça — o html é buscado depois, um por
+    # um, em /api/laudos/{id} quando alguém abre o laudo.
+    colunas = "id, peca_id, tipo, criado_por, criado_em, execucao_id" if resumo else "*"
     with get_db() as conn:
         cursor = conn.cursor()
         if peca_id:
             cursor.execute(
-                "SELECT * FROM laudos WHERE peca_id = %s ORDER BY id DESC LIMIT %s",
+                f"SELECT {colunas} FROM laudos WHERE peca_id = %s ORDER BY id DESC LIMIT %s",
                 (peca_id, limite)
             )
         else:
-            cursor.execute("SELECT * FROM laudos ORDER BY id DESC LIMIT %s", (limite,))
+            cursor.execute(f"SELECT {colunas} FROM laudos ORDER BY id DESC LIMIT %s", (limite,))
         return cursor.fetchall()
 
 
