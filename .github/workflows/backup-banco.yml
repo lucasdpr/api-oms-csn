@@ -1,0 +1,53 @@
+# Backup diário do banco (Neon). O plano gratuito do Neon só guarda 6 horas de
+# histórico e não tem backup agendado; este job tira uma cópia completa todo dia
+# e guarda por 30 dias como artefato do GitHub (aba Actions -> execução -> Artifacts).
+#
+# Configuração (uma vez): Settings -> Secrets and variables -> Actions ->
+# New repository secret, nome DATABASE_URL, valor = string de conexão DIRETA do
+# Neon (a sem "-pooler" no host). Depois: Actions -> Backup do banco -> Run workflow.
+#
+# Só LÊ o banco (pg_dump): não altera nada nem aumenta o armazenamento dele.
+name: Backup do banco
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 03:00 no horário de Brasília
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Instalar cliente PostgreSQL 18 (igual ao do Neon)
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          . /etc/os-release
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-18
+
+      - name: Gerar o backup
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "Secret DATABASE_URL não configurado (veja o comentário no topo deste arquivo)."
+            exit 1
+          fi
+          /usr/lib/postgresql/18/bin/pg_dump "$DATABASE_URL" --no-owner --no-privileges -Fc -f backup.dump
+          ls -l backup.dump
+          # confere que o arquivo é um backup legível e não está vazio
+          /usr/lib/postgresql/18/bin/pg_restore --list backup.dump | grep -c "TABLE DATA" 
+
+      - name: Guardar por 30 dias
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-banco-${{ github.run_id }}
+          path: backup.dump
+          retention-days: 30
+          if-no-files-found: error
