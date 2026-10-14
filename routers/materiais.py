@@ -32,8 +32,26 @@ def cadastrar_material(dados: MaterialCadastro):
 
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT qtd FROM materiais WHERE codigo = %s", (codigo,))
+        cursor.execute("SELECT qtd, ativo FROM materiais WHERE codigo = %s", (codigo,))
         existente = cursor.fetchone()
+
+        # 🔧 CORREÇÃO (achado no teste completo): "excluir" só desativa o
+        # material (ativo = FALSE). Cadastrar o MESMO código depois
+        # reativava e SOMAVA o saldo antigo de quando foi excluído — o
+        # material "voltava" com estoque fantasma. Material excluído conta
+        # como cadastro novo: volta ativo, com a descrição e o saldo
+        # informados agora.
+        if existente and not existente["ativo"]:
+            if dados.qtd < 0:
+                raise HTTPException(status_code=400, detail="O saldo em estoque não pode ser negativo.")
+            cursor.execute(
+                "UPDATE materiais SET qtd = %s, descricao = %s, local = %s, valor_unit = %s, ativo = TRUE WHERE codigo = %s",
+                (dados.qtd, descricao, dados.local, dados.valor_unit, codigo)
+            )
+            existente = None
+            reativado = True
+        else:
+            reativado = False
 
         # 🔧 CORREÇÃO (achado de auditoria): esta rota não validava
         # estoque negativo, enquanto a rota irmã /materiais/ajustar já
@@ -47,6 +65,8 @@ def cadastrar_material(dados: MaterialCadastro):
                 (dados.qtd, codigo)
             )
             ja_existia = True
+        elif reativado:
+            ja_existia = False
         else:
             if dados.qtd < 0:
                 raise HTTPException(status_code=400, detail="O saldo em estoque não pode ser negativo.")
