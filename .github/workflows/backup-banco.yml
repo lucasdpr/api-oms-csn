@@ -36,10 +36,19 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo "Secret DATABASE_URL não configurado (veja o comentário no topo deste arquivo)."
+            echo "::error title=Backup::Secret DATABASE_URL não configurado (veja o comentário no topo deste arquivo)."
             exit 1
           fi
-          /usr/lib/postgresql/18/bin/pg_dump "$DATABASE_URL" --no-owner --no-privileges -Fc -f backup.dump
+          # Mostra no resumo da execução qual parte da conexão está em uso,
+          # SEM a senha, pra dar pra diagnosticar sem abrir o log.
+          HOST=$(echo "$DATABASE_URL" | sed -E 's#^[a-z]+://[^@]*@([^/?]+).*#\1#')
+          echo "Host de conexão: $HOST"
+          case "$HOST" in *-pooler*) echo "::warning title=Backup::O host tem '-pooler'. Use a conexão DIRETA do Neon (sem '-pooler')." ;; esac
+          if ! /usr/lib/postgresql/18/bin/pg_dump "$DATABASE_URL" --no-owner --no-privileges -Fc -f backup.dump 2> erro_dump.txt; then
+            MSG=$(tr '\n' ' ' < erro_dump.txt | sed -E 's#(postgres(ql)?://[^:]+:)[^@]+@#\1***@#g' | cut -c1-400)
+            echo "::error title=Backup falhou no pg_dump::$MSG"
+            exit 1
+          fi
           ls -l backup.dump
           # confere que o arquivo é um backup legível e não está vazio
           /usr/lib/postgresql/18/bin/pg_restore --list backup.dump | grep -c "TABLE DATA" 
